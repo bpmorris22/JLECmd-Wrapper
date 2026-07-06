@@ -5,6 +5,29 @@ A single-file (`.hta`) GUI for triaging **Windows Jump Lists** with Eric Zimmerm
 CSVs (`AutomaticDestinations` + `CustomDestinations`) into one interactive, suspicion-scored view of
 what the interactive user opened, when, and from where — per user profile.
 
+## Screenshots
+
+Overview — stats, top applications, most-recent activity, and score-ranked suspicious targets
+(all recomputed over the active filters):
+
+![Overview](screenshots/01-overview.png)
+
+Entries view — one row per destination, suspicion-scored and tagged (staging paths, executable/script
+targets, LNK arguments, UNC/removable, foreign tracker host):
+
+![Entries](screenshots/02-entries.png)
+
+Timeline view — first/last-opened events from automatic entries plus per-file activity for custom
+jump lists, flattened and sorted:
+
+![Timeline](screenshots/03-timeline.png)
+
+Applications view — per-AppId rollup with entry counts, distinct targets, and activity range:
+
+![Applications](screenshots/04-applications.png)
+
+> Screenshots use synthetic sample data (fake host `ACME-WS01` / user `jdoe`) — no real case data.
+
 Part of the same wrapper family as
 [PECmd-Wrapper](https://github.com/bpmorris22/PECmd-Wrapper),
 [AmcacheParser-Wrapper](https://github.com/bpmorris22/AmcacheParser-Wrapper),
@@ -71,12 +94,12 @@ and the filtered view exports to CSV or copies as case notes.
 ## Command line
 
 ```
-mshta "JLECmd-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto]
+mshta "JLECmd-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto] [/view:entries|time|apps]
 ```
 
-- `<input>` — a `.csv` (auto-loads into the viewer) or a jump-list file / directory (prefilled;
-  processed immediately with `/auto`).
-- `<outDir>` — CSV output directory (optional).
+- `<input>` — a `.csv` (auto-loads into the viewer, pairing the Automatic/Custom sibling automatically)
+  or a jump-list file / directory (prefilled; processed immediately with `/auto`).
+- `<outDir>` — CSV output directory (optional). &nbsp; `/view:` — open directly on a specific view.
 
 ## Notes
 
