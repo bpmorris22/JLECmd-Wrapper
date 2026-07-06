@@ -1,0 +1,1776 @@
+<!doctype html>
+<html>
+<head>
+<meta http-equiv="x-ua-compatible" content="IE=edge">
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>JLECmd Wrapper</title>
+<HTA:APPLICATION
+  ID="jlecmdHta"
+  APPLICATIONNAME="JLECmd Wrapper"
+  BORDER="thick"
+  CAPTION="yes"
+  SCROLL="auto"
+  SINGLEINSTANCE="yes"
+  SHOWINTASKBAR="yes"
+  MAXIMIZEBUTTON="yes"
+  MINIMIZEBUTTON="yes"
+  INNERBORDER="no"
+  CONTEXTMENU="yes"
+  SELECTION="yes" />
+<!--
+  JLECmd CSV contract, VERIFIED 2026-07-06 against JLECmd 1.5.0.0 output on this workstation:
+
+  <ts>_AutomaticDestinations.csv  (one row per DestList entry):
+    SourceFile,SourceCreated,SourceModified,SourceAccessed,AppId,AppIdDescription,DestListVersion,
+    LastUsedEntryNumber,MRU,EntryNumber,CreationTime,LastModified,Hostname,MacAddress,Path,InteractionCount,
+    PinStatus,FileBirthDroid,FileDroid,VolumeBirthDroid,VolumeDroid,TargetCreated,TargetModified,TargetAccessed,
+    FileSize,RelativePath,WorkingDirectory,FileAttributes,HeaderFlags,DriveType,VolumeSerialNumber,VolumeLabel,
+    LocalPath,CommonPath,TargetIDAbsolutePath,TargetMFTEntryNumber,TargetMFTSequenceNumber,MachineID,
+    MachineMACAddress,TrackerCreatedOn,ExtraBlocksPresent,Arguments,Notes
+
+  <ts>_CustomDestinations.csv  (one row per LNK entry):
+    SourceFile,SourceCreated,SourceModified,SourceAccessed,AppId,AppIdDescription,EntryName,TargetCreated,
+    TargetModified,TargetAccessed,FileSize,RelativePath,WorkingDirectory,FileAttributes,HeaderFlags,DriveType,
+    VolumeSerialNumber,VolumeLabel,LocalPath,CommonPath,TargetIDAbsolutePath,TargetMFTEntryNumber,
+    TargetMFTSequenceNumber,MachineID,MachineMACAddress,TrackerCreatedOn,ExtraBlocksPresent,Arguments
+
+  - All timestamps UTC "yyyy-MM-dd HH:mm:ss". Both CSVs from one run are ONE dataset (Type A / Type C).
+  - JLECmd (like PECmd) crashes at Console.WindowWidth without a console. Two consequences baked in below:
+      * PROCESSING runs in a VISIBLE console (runBatAsync show=true).
+      * VERSION detection uses "JLECmd --version" (short-circuits before DoWork/WindowWidth, so it is
+        safe even in the hidden console runBat uses) — do NOT call the bare exe like the PECmd wrapper does.
+  - Live per-user jump lists live in %APPDATA%\Microsoft\Windows\Recent\{AutomaticDestinations,CustomDestinations}
+    and are readable by the owning user WITHOUT elevation; other profiles need an elevated run.
+  - "Empty custom destinations jump list" failures are ROUTINE — triage leniently (count, not fatal).
+-->
+<style>
+  html{margin:0;height:100%;background:#0d1117}
+  body{margin:0;height:100%;background:#0d1117;color:#e6edf3;font-family:Segoe UI,Tahoma,sans-serif;font-size:16px}
+  #content{zoom:0.9}
+  a{color:#58a6ff}
+  .mono{font-family:Consolas,"Courier New",monospace}
+  .muted{color:#8b949e}
+  .err{color:#f85149}
+  .ok{color:#3fb950}
+  header{padding:8px 14px;background:#161b22;border-bottom:1px solid #30363d}
+  header h1{display:inline-block;font-size:15px;margin:0;font-weight:600;vertical-align:middle}
+  header h1 small{color:#8b949e;font-weight:400}
+  .pill{display:inline-block;font-size:11px;color:#8b949e;border:1px solid #30363d;border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
+  .wrap{padding:12px 14px}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:12px}
+  .card h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}
+  label.fld{display:block;margin:6px 0 2px;font-size:11px;color:#8b949e}
+  input.txt,select,textarea{background:#1c2330;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:5px 8px;font-size:13px;font-family:Consolas,monospace}
+  input.wide{width:62%}
+  .btn{background:#1c2330;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;margin:2px}
+  .btn:hover{border-color:#58a6ff}
+  .btn.primary{background:#1f6feb;border-color:#1f6feb}
+  .btn.on{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  .row{white-space:nowrap}
+  .stat{display:inline-block;background:#1c2330;border:1px solid #30363d;border-radius:8px;padding:6px 12px;margin:0 6px 6px 0;min-width:70px;vertical-align:top}
+  .stat .n{font-size:17px;font-weight:700;display:block}
+  .stat .l{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
+  .cards3{width:100%}
+  .col3{display:inline-block;width:32%;vertical-align:top;margin-right:1%}
+  .brow{white-space:nowrap;margin:3px 0}
+  .blab{display:inline-block;width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;font-family:Consolas,monospace;font-size:11px}
+  .blab.lnk{cursor:pointer;color:#58a6ff}
+  .blab.lnk:hover{text-decoration:underline}
+  .btrack{display:inline-block;width:32%;height:12px;background:#1c2330;border-radius:3px;overflow:hidden;vertical-align:middle}
+  .bfill{display:block;height:100%;background:#1f6feb}
+  .bval{display:inline-block;width:18%;text-align:right;font-size:11px;color:#8b949e;vertical-align:middle}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:4px 7px;border-bottom:1px solid #30363d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  th{background:#1c2330;cursor:pointer;color:#c9d1d9;position:relative;z-index:3;box-shadow:0 1px 0 #30363d}
+  th:hover{color:#58a6ff}
+  .cgrip{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:6}
+  .cgrip:hover{background:#58a6ff;filter:alpha(opacity=45);opacity:.45}
+  td{max-width:360px}
+  tr.sus td{background:#2a1416}
+  tr.sus td.first{border-left:3px solid #ff6b6b}
+  tr.sel td{background:#1c2f4a}
+  .scroll{max-height:52vh;overflow:auto;border:1px solid #30363d;border-radius:8px}
+  .tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600;margin-right:3px}
+  .tag.sus{background:#3a1416;color:#ff6b6b}
+  .tag.usr{background:#3a2d10;color:#d29922}
+  .tag.lol{background:#10263f;color:#58a6ff}
+  .tag.rare{background:#241a3a;color:#b083f0}
+  .tag.ioc{background:#3a1416;color:#ff6b6b;border:1px solid #ff6b6b}
+  .tag.gen{background:#21262d;color:#8b949e}
+  .tag.ta{background:#0f2c1a;color:#3fb950}
+  .tag.tc{background:#10263f;color:#58a6ff}
+  .dl{font-family:Consolas,"Courier New",monospace;font-size:11px;max-height:210px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px;margin:4px 0;white-space:nowrap}
+  .dl div{overflow:hidden;text-overflow:ellipsis}
+  .kv{font-size:12px;margin:2px 0}
+  .kv b{display:inline-block;min-width:150px;color:#8b949e;font-weight:400}
+  .hl-user{color:#d29922}
+  .hl-ioc{color:#ff6b6b;font-weight:700}
+  #log{white-space:pre-wrap;font-family:Consolas,monospace;font-size:11px;color:#8b949e;max-height:140px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;display:none;margin-top:8px}
+  .hide{display:none}
+  .lnk{cursor:pointer;color:#58a6ff}
+  .lnk:hover{text-decoration:underline}
+  .sep{display:inline-block;width:1px;height:18px;background:#30363d;margin:0 6px;vertical-align:middle}
+  .modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.66);z-index:1000;overflow:auto}
+  .modal .mcard{max-width:780px;margin:36px auto;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:18px 22px}
+  .modal h2{margin:0 0 6px;font-size:18px;font-weight:600}
+  .modal h3{margin:12px 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e}
+  .modal ul{margin:4px 0;padding-left:20px}.modal li{margin:3px 0;font-size:13px}
+  .modal p{font-size:13px;margin:6px 0}
+  .modal code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 6px;font-family:Consolas,monospace;font-size:12px}
+  .modal .x{float:right;cursor:pointer;color:#8b949e;font-size:22px;line-height:1}.modal .x:hover{color:#e6edf3}
+  .modal .gh{font-family:Consolas,monospace;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>JLECmd Wrapper <small>&mdash; DFIR jump-list triage <span id="appver"></span></small></h1>
+  <span class="pill" id="verpill">version: checking&hellip;</span>
+  <span class="pill" id="srcpill">no data loaded</span>
+  <span style="float:right">
+    <button class="btn" id="helpBtn" onclick="openHelp()" title="Help, about &amp; GitHub link">Help</button>
+    <button class="btn primary hide" id="selfUpd" onclick="doSelfUpdate()" title="A newer version is available on GitHub">Update</button>
+    <button class="btn" id="fdown" title="Smaller text">A&minus;</button>
+    <button class="btn" id="fup" title="Larger text">A+</button>
+  </span>
+</header>
+
+<div class="wrap" id="content">
+
+  <!-- CONTROL PANEL -->
+  <div class="card">
+    <h3>JLECmd control panel</h3>
+    <div class="muted" id="exeline" style="font-size:11px;margin-bottom:6px"></div>
+    <label class="fld">Jump lists to process
+      &mdash; <select id="inMode" title="Single file = process one .automaticDestinations-ms / .customDestinations-ms (JLECmd -f). Directory = recurse a folder (JLECmd -d) and process every jump-list file inside — a live Recent folder or a KAPE/Velociraptor Users tree both work.">
+        <option value="d">directory (recursive)</option><option value="f">single jump-list file</option></select>
+      &nbsp;<label style="font-size:12px" title="-q: quiet console output. Recommended for directory runs.">
+        <input type="checkbox" id="optQuiet" checked> quiet</label>
+      &nbsp;<label style="font-size:12px" title="--mp: display higher-precision timestamps (sub-second).">
+        <input type="checkbox" id="optMp"> precise timestamps</label>
+      &nbsp;<label style="font-size:12px" title="--withDir: also include directory entries not accounted for in the DestList (orphaned / deleted-entry residue). Adds extra rows to AutomaticDestinations output.">
+        <input type="checkbox" id="optWithDir"> orphaned entries</label>
+      &nbsp;<label style="font-size:12px" title="--all: process ALL files regardless of extension (for renamed / oddly-named collections).">
+        <input type="checkbox" id="optAll"> any extension</label>
+    </label>
+    <input class="txt wide" id="jlPath" value="">
+    <input type="file" id="jlPick" style="display:none">
+    <button class="btn" id="browseBtn">Browse&hellip;</button>
+    <button class="btn" id="liveBtn" title="Point at this user's live %APPDATA%\Microsoft\Windows\Recent (both AutomaticDestinations and CustomDestinations are picked up in one recursive pass). Readable without elevation for the current user; other profiles need an elevated run.">Scan this user's Recent</button>
+    <label class="fld">CSV output directory</label>
+    <input class="txt wide" id="outDir" value="">
+    <button class="btn" id="openDirBtn">Open folder</button>
+    <div style="margin-top:10px">
+      <button class="btn" id="verBtn">Check version</button>
+      <button class="btn" id="updBtn">Update / download JLECmd</button>
+      <span class="sep"></span>
+      <button class="btn primary" id="procBtn">Process &rarr; analyze</button>
+      <button class="btn" id="loadBtn">Load existing CSV&hellip;</button>
+      <input type="file" id="csvPick" style="display:none">
+      <span class="sep"></span>
+      <button class="btn" id="logToggle">Show log</button>
+      <span class="muted" id="status" style="margin-left:8px"></span>
+    </div>
+    <div style="margin-top:8px" id="producedRow" class="hide">
+      <label class="fld">Produced CSVs &mdash; both load together; pick one to view it alone</label>
+      <select id="producedSel" style="min-width:70%"></select>
+      <button class="btn" id="loadSelBtn">Load selected</button>
+      <button class="btn" id="loadBothBtn">Load both (merged)</button>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="results" class="hide">
+    <div class="card">
+      <h3 id="ovTitle">Overview</h3>
+      <div id="statbar"></div>
+    </div>
+
+    <div class="card cards3 hide" id="jlCards">
+      <div class="col3"><h3>Top applications (by entries)</h3><div id="jlTopApps"></div></div>
+      <div class="col3"><h3>Most recent activity</h3><div id="jlTopRecent"></div></div>
+      <div class="col3"><h3>Suspicious targets</h3><div id="jlTopSus"></div></div>
+    </div>
+
+    <div class="card">
+      <h3 id="tableTitle">Entries</h3>
+      <div class="row hide" style="margin-bottom:8px" id="viewToggle">
+        <button class="btn on" id="vEntries" title="One row per jump-list destination entry (automatic + custom, unified)">Entries</button>
+        <button class="btn" id="vTime" title="One row per activity event — first/last-opened times from automatic entries, plus per-file activity for custom jump lists, flattened and sorted">Timeline</button>
+        <button class="btn" id="vApps" title="One row per application (AppId), rolled up">Applications</button>
+      </div>
+      <div class="row hide" style="margin-bottom:8px" id="jlCats">
+        <button class="btn on" data-cat="all">All</button>
+        <button class="btn" data-cat="sus">Suspicious</button>
+        <button class="btn" data-cat="userpath">User-path</button>
+        <button class="btn" data-cat="exec">Exec-Script</button>
+        <button class="btn" data-cat="remote">Remote-Removable</button>
+        <button class="btn" data-cat="archive">Archives</button>
+        <button class="btn" data-cat="args">Args</button>
+        <button class="btn" data-cat="ioc">IOC hits</button>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <input class="txt" id="q" placeholder="search target, args, app, user, source&hellip;" style="width:280px">
+        <span id="userWrap" class="hide"><span class="sep"></span><label class="muted" style="font-size:12px">user:</label>
+          <select id="userSel" title="Filter by derived user profile."><option value="">all users</option></select></span>
+        <span id="jlDateCtl" class="hide">
+          <span class="sep"></span>
+          <input class="txt mono" id="dfrom" placeholder="from YYYY-MM-DD" style="width:140px" title="Filter by activity time (UTC)">
+          <span class="muted">&rarr;</span>
+          <input class="txt mono" id="dto" placeholder="to YYYY-MM-DD" style="width:140px" title="Filter by activity time (UTC)">
+        </span>
+        <span class="sep"></span>
+        <button class="btn" id="iocBtn">IOC / keywords&hellip;</button>
+        <button class="btn" id="clearBtn">clear</button>
+        <button class="btn" id="exportBtn">Export view &rarr; CSV</button>
+        <button class="btn" id="copyBtn">Copy for case notes</button>
+        <span class="muted" id="count" style="margin-left:8px"></span>
+      </div>
+      <div id="iocWrap" class="hide" style="margin-bottom:8px">
+        <label class="fld">IOC / keyword list — comma or newline separated; matched (case-insensitive substring) against target, arguments, application, source file and working directory. Matches score +3 and light up red in the detail pane.</label>
+        <textarea id="iocBox" rows="3" style="width:70%;vertical-align:top"></textarea>
+        <button class="btn" id="iocApply">Apply</button>
+        <button class="btn" id="iocLoad">Load file&hellip;</button>
+        <input type="file" id="iocPick" style="display:none">
+        <span class="muted" id="iocInfo" style="font-size:11px"></span>
+      </div>
+      <div class="scroll" id="tblScroll"><table id="tbl"></table></div>
+      <div class="muted" id="jlFoot" style="font-size:11px;margin-top:6px">All timestamps UTC. Suspicious rows are shaded (heuristic score &ge; 2: staging-path or executable/script targets, LNK arguments, UNC/removable access, IOC hits&hellip;). Click a row for full detail. Max 6000 rows shown; export writes the full filtered set.</div>
+    </div>
+
+    <div class="card hide" id="detailCard">
+      <h3>Entry detail <span class="lnk" id="detCopy" style="float:right;margin-left:12px">copy record</span><span class="lnk" id="detClose" style="float:right">close &times;</span></h3>
+      <div id="detBody"></div>
+    </div>
+  </div>
+
+</div>
+
+<script language="JScript">
+"use strict";
+
+var APP_VERSION = "0.2.0";
+var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
+var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
+var JLECMD_PAGE = "https://ericzimmerman.github.io/";                            // for live latest-version lookup
+var LIVE_RECENT = "";                // computed at init: %APPDATA%\Microsoft\Windows\Recent
+var EXE = "";
+var EXE_DIR = "";
+var LOCAL_VER = "";
+var LATEST_VER = "";
+var WEB_OK = false;
+var QUERY = "";
+var MAXROWS = 6000;
+var LASTOUTDIR = "";
+var qTimer = null;
+var MODE = "jl";                      // "jl" = rich jump-list analysis, "generic" = raw table
+var VIEW = "entries";                 // "entries" | "time" | "apps"
+var ROWS = [];                        // unified jump-list records (type A + C)
+var EVENTS = [];                      // flattened activity events {t, ms, day, kind, rec}
+var APPS = [];                        // per-AppId aggregates
+var CURCAT = "all";
+var DFROM = 0, DTO = 0;
+var APPFILTER = "";                   // selected AppId filter (from Applications view / overview)
+var SORTKEY = 6, SORTDIR = -1;        // entries view: default Activity desc
+var TSORTKEY = 1, TSORTDIR = -1;      // timeline view: default Time desc
+var ASORTKEY = 3, ASORTDIR = -1;      // apps view: default Entries desc
+var IOCS = [];                        // lowercased IOC / keyword terms
+var DETREC = null;
+var GHEAD = null, GROWS = [], GSRC = "";
+var GSORTKEY = -1, GSORTDIR = 1;
+var GSRCIDX = -1;
+var SRCFILTER = "";                   // generic-mode source filter
+var USERFILTER = "";                  // jl-mode user filter
+var BUSY = false;
+var PRODUCED = [];
+var HOMEHOST = "";                    // most-common MachineID (masquerade/foreign anchor)
+
+/* suspicion knobs (spec §8) */
+var STAGING = ["\\appdata\\","\\temp\\","\\programdata\\","\\perflogs\\","\\windows\\temp\\","\\$recycle.bin\\","\\public\\"];
+/* FP guard (tuned 2026-07-06 on this box): legitimate per-user install/shortcut roots that live under
+   \AppData\ but are NOT attacker staging. Excluding these from J1 kills the chronic per-user-app noise
+   (VS Code, Store apps, Teams, Start-Menu shortcuts) WITHOUT touching \AppData\Roaming\<vendor>\ or
+   \AppData\Local\Temp\ — where the campaign's Node.js/Java RATs actually staged (documet.docx, node-v22). */
+var NOTSTAGING = ["\\appdata\\local\\programs\\","\\appdata\\local\\microsoft\\windowsapps\\",
+  "\\appdata\\local\\microsoft\\teams\\","\\appdata\\roaming\\microsoft\\windows\\start menu\\",
+  "\\appdata\\local\\programs\\microsoft vs code\\"];
+var EXEC_EXT = {exe:1,dll:1,ps1:1,psm1:1,bat:1,cmd:1,vbs:1,vbe:1,js:1,jse:1,wsf:1,hta:1,scr:1,msi:1,jar:1,py:1,lnk:1};
+var ARCHIVE_EXT = {zip:1,rar:1,"7z":1,cab:1,iso:1,img:1,vhd:1,vhdx:1,tar:1,gz:1};
+var ARGS_HOT = ["http","-enc","-e ","powershell","iex","mshta","rundll32","regsvr32","curl","wget","bitsadmin","certutil","\\\\"];
+
+/* ---------- tiny helpers ---------- */
+function $(id){ return document.getElementById(id); }
+function esc(s){ if(s==null) return ""; s=String(s);
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function endsWith(s,suf){ if(!s) return false; s=String(s); return s.length>=suf.length && s.substring(s.length-suf.length)===suf; }
+function contains(s,sub){ return String(s).indexOf(sub)>=0; }
+function nf(n){ n=String(n); var dot=n.indexOf("."); var dec=""; if(dot>=0){ dec=n.substring(dot); n=n.substring(0,dot); }
+  var r="",c=0; for(var k=n.length-1;k>=0;k--){ r=n.charAt(k)+r; c++; if(c%3===0&&k>0) r=","+r; } return r+dec; }
+function setStatus(msg,cls){ var el=$("status"); el.innerHTML=esc(msg); el.className=cls||"muted"; }
+function appendLog(t){ var el=$("log"); if(el.getAttribute("data-ph")==="1"){ el.innerHTML=""; el.setAttribute("data-ph","0"); }
+  el.style.display="block"; $("logToggle").innerHTML="Hide log"; el.innerHTML+=esc(t)+"\n"; el.scrollTop=el.scrollHeight; }
+function trimStr(s){ return String(s).replace(/^\s+|\s+$/g,""); }
+function baseName(p){ if(!p) return ""; p=String(p); var i=Math.max(p.lastIndexOf("\\"),p.lastIndexOf("/")); return i>=0?p.substring(i+1):p; }
+function showEl(id,vis){ var e=$(id); if(!e) return; var c=e.className.replace(/\s*\bhide\b/g,"");
+  e.className = vis ? c : (c+" hide"); }
+function msOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if(!m) return 0; return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]); }
+function dayOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); if(!m) return 0; return Number(m[1]+m[2]+m[3]); }
+function firstNonEmpty(arr){ for(var i=0;i<arr.length;i++){ if(arr[i]!=null && trimStr(arr[i])!=="") return arr[i]; } return ""; }
+function extOf(p){ p=String(p); var b=baseName(p); var i=b.lastIndexOf("."); return i>=0?b.substring(i+1).toLowerCase():""; }
+
+/* ---------- file IO via ActiveX (UTF-8 safe, with network-zone fallback) ----------
+   Same rationale as the PECmd/SQLECmd wrappers: ADODB.Stream is the proper UTF-8 reader, but from a
+   NETWORK location (mapped drive / UNC) mshta gets the intranet zone and ADODB refuses every LoadFromFile
+   with a "Safety settings" error regardless of where the target lives. FSO is not zone-checked, so we fall
+   back to ANSI IO — CSV structure is unaffected (all-ASCII); only rare non-ASCII path chars display wrong. */
+var FILE_IO="adodb";
+function zoneNote(){
+  appendLog("NOTE: this app is running from a network location, so Windows zone policy blocks the UTF-8 file reader (ADODB.Stream). Falling back to ANSI file IO — everything works, but non-ASCII characters (accented usernames in paths) may display incorrectly. For full fidelity copy this folder to a LOCAL path (e.g. C:\\Tools\\JLECmd) and run it from there.");
+}
+function readUtf8(path){
+  if(FILE_IO==="adodb"){
+    try{
+      var st=new ActiveXObject("ADODB.Stream");
+      st.Type=2; st.Charset="utf-8"; st.Open(); st.LoadFromFile(path);
+      var parts=[]; while(!st.EOS){ parts.push(st.ReadText(65536)); } st.Close();
+      return parts.join("");
+    }catch(e){
+      if(!/safety settings|data source/i.test(e.message||"")) throw e;
+      FILE_IO="fso"; zoneNote();
+    }
+  }
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var f=fso.OpenTextFile(path,1,false,0), out=f.ReadAll(); f.Close();
+  if(out.length>=3 && out.charCodeAt(0)===239 && out.charCodeAt(1)===187 && out.charCodeAt(2)===191) out=out.substring(3);
+  return out;
+}
+function writeUtf8(path,text){
+  if(FILE_IO==="adodb"){
+    try{
+      var st=new ActiveXObject("ADODB.Stream");
+      st.Type=2; st.Charset="utf-8"; st.Open(); st.WriteText(text); st.SaveToFile(path,2); st.Close();
+      return;
+    }catch(e){
+      if(!/safety settings|data source/i.test(e.message||"")) throw e;
+      FILE_IO="fso"; zoneNote();
+    }
+  }
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var f=fso.CreateTextFile(path,true,false); f.Write(text); f.Close();
+}
+function uid(){ return new Date().getTime()+""+Math.floor(Math.random()*100000); }
+/* cmd expands %N / %VAR% inside .bat lines even within quotes — Velociraptor trees contain literal % (C%3A) */
+function batEsc(s){ return String(s).replace(/%/g,"%%"); }
+
+/* Run a batch script, wait, return {rc, log}. show=true → visible console window. */
+function runBat(lines, show){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  var tmp=fso.GetSpecialFolder(2)+"";
+  var stamp=uid();
+  var bat=tmp+"\\jle_"+stamp+".bat";
+  var logp=tmp+"\\jle_"+stamp+".log";
+  var f=fso.CreateTextFile(bat,true);
+  f.WriteLine("@echo off");
+  for(var i=0;i<lines.length;i++){ f.WriteLine(lines[i].replace(/__LOG__/g,logp)); }
+  f.Close();
+  var rc=sh.Run('cmd /c ""'+bat+'""', show?1:0, true);
+  var txt="";
+  try{ if(fso.FileExists(logp)) txt=readUtf8(logp); }catch(e){ txt="(could not read log: "+e.message+")"; }
+  try{ fso.DeleteFile(bat); }catch(e2){}
+  try{ if(fso.FileExists(logp)) fso.DeleteFile(logp); }catch(e3){}
+  return { rc:rc, log:txt };
+}
+
+/* Run a batch NON-blocking; writes a .done marker when finished. Caller polls with pollDone(). */
+function runBatAsync(lines, show){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  var tmp=fso.GetSpecialFolder(2)+"";
+  var stamp=uid();
+  var bat=tmp+"\\jle_"+stamp+".bat";
+  var logp=tmp+"\\jle_"+stamp+".log";
+  var donep=tmp+"\\jle_"+stamp+".done";
+  var f=fso.CreateTextFile(bat,true);
+  f.WriteLine("@echo off");
+  for(var i=0;i<lines.length;i++){ f.WriteLine(lines[i].replace(/__LOG__/g,logp)); }
+  f.WriteLine('echo done> "'+donep+'"');
+  f.Close();
+  sh.Run('cmd /c ""'+bat+'""', show?1:0, false);
+  return { bat:bat, log:logp, done:donep, elapsed:0 };
+}
+function pollDone(ctx){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(fso.FileExists(ctx.done)){
+    var log=""; try{ if(fso.FileExists(ctx.log)) log=readUtf8(ctx.log); }catch(e){ log="(could not read log: "+e.message+")"; }
+    try{ fso.DeleteFile(ctx.bat); }catch(e1){}
+    try{ fso.DeleteFile(ctx.done); }catch(e2){}
+    try{ if(fso.FileExists(ctx.log)) fso.DeleteFile(ctx.log); }catch(e3){}
+    ctx.onDone(log);
+    return;
+  }
+  ctx.elapsed+=1;
+  if(ctx.elapsed>1800){ ctx.onTimeout&&ctx.onTimeout(); return; }
+  if(ctx.onTick) ctx.onTick(ctx.elapsed);
+  window.setTimeout(function(){ pollDone(ctx); }, 1000);
+}
+
+/* ---------- user filter (jl mode) ---------- */
+function distinctVals(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(v!=null && v!=="" && !seen[v]){ seen[v]=1; out.push(v); } } return out; }
+function shortPathN(p,n){ p=String(p); var parts=p.split("\\"); if(parts.length<=n) return p; return "…\\"+parts.slice(parts.length-n).join("\\"); }
+function populateUserFilter(vals){
+  var sel=$("userSel"); sel.innerHTML="";
+  var o0=document.createElement("option"); o0.value=""; o0.text="all users ("+vals.length+")"; sel.add(o0);
+  vals=vals.slice(0).sort();
+  for(var i=0;i<vals.length;i++){ var o=document.createElement("option"); o.value=vals[i]; o.text=vals[i]; sel.add(o); }
+  USERFILTER=""; sel.value="";
+  showEl("userWrap", vals.length>1);
+}
+/* generic-mode source filter (unchanged from family) */
+function populateSourceFilter(vals){
+  var sel=$("userSel"); sel.innerHTML="";
+  var o0=document.createElement("option"); o0.value=""; o0.text="all source files ("+vals.length+")"; sel.add(o0);
+  vals=vals.slice(0).sort();
+  for(var i=0;i<vals.length;i++){ var o=document.createElement("option"); o.value=vals[i]; o.text=shortPathN(vals[i],4); sel.add(o); }
+  SRCFILTER=""; sel.value="";
+  showEl("userWrap", vals.length>1);
+}
+
+/* ---------- tooling: locate / version / download ---------- */
+function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FileExists(p); }catch(e){ return false; } }
+function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
+function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
+function htaFolder(){
+  try{ var cl=jlecmdHta.commandLine+""; var m=cl.match(/"([^"]+\.hta)"/i); if(!m) m=cl.match(/([A-Za-z]:\\[^"]+\.hta)/i);
+    if(m) return parentDir(m[1]); }catch(e){}
+  try{ var p=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\"); return parentDir(p); }catch(e2){}
+  return "";
+}
+function resolveExe(){
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var dir=htaFolder(), cands=[];
+  if(dir) cands.push(dir+"\\JLECmd.exe");
+  cands.push("C:\\ZimmermanTools\\net6\\JLECmd.exe");
+  cands.push("C:\\ZimmermanTools\\JLECmd.exe");
+  for(var i=0;i<cands.length;i++){ if(fso.FileExists(cands[i])){ EXE=cands[i]; EXE_DIR=parentDir(cands[i]); return true; } }
+  EXE=""; EXE_DIR=dir||""; return false;
+}
+function checkDeps(){
+  var fso=new ActiveXObject("Scripting.FileSystemObject"); var miss=[];
+  if(!EXE_DIR) return ["(install folder unknown)"];
+  if(fso.FileExists(EXE_DIR+"\\JLECmd.runtimeconfig.json") && !fso.FileExists(EXE_DIR+"\\JLECmd.dll")) miss.push("JLECmd.dll");
+  return miss;
+}
+function verTuple(v){ var p=String(v).split("."); var a=[]; for(var i=0;i<p.length;i++) a.push(parseInt(p[i],10)||0); return a; }
+function verCmp(a,b){ a=verTuple(a); b=verTuple(b); var n=Math.max(a.length,b.length);
+  for(var i=0;i<n;i++){ var x=a[i]||0,y=b[i]||0; if(x!==y) return x<y?-1:1; } return 0; }
+function fetchLatest(){
+  LATEST_VER=KNOWN_LATEST_JLECMD; WEB_OK=false;
+  try{
+    var x=new ActiveXObject("MSXML2.ServerXMLHTTP.6.0");
+    x.setTimeouts(2000,3000,4000,4000);
+    x.open("GET", JLECMD_PAGE, false); x.send();
+    if(x.status===200){ WEB_OK=true; var t=x.responseText+"";
+      var m=t.match(/JLECmd[\s\S]{0,800}?(\d{4}\.\d+\.\d+)/i) || t.match(/JLECmd[\s\S]{0,800}?(\d+\.\d+\.\d+)/i);
+      if(m) LATEST_VER=m[1]; }
+  }catch(e){ WEB_OK=false; }
+  return LATEST_VER;
+}
+function updateVerPill(){
+  var s=LOCAL_VER?("JLECmd v"+esc(LOCAL_VER)):"JLECmd: not found";
+  if(!WEB_OK){ s+=" &middot; <span style='color:#8b949e'>no internet / no web source</span>"; }
+  else if(LATEST_VER){
+    if(LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0) s+=" &middot; <span style='color:#d29922'>update v"+esc(LATEST_VER)+" available</span>";
+    else if(LOCAL_VER) s+=" &middot; <span style='color:#3fb950'>latest</span>";
+    else s+=" &middot; latest v"+esc(LATEST_VER);
+  }
+  $("verpill").innerHTML=s;
+}
+function evaluateTooling(promptIfNeeded){
+  var dir=htaFolder();
+  var localComplete = dir ? fileExists(dir+"\\JLECmd.exe") : false;
+  var found=resolveExe();
+  if(EXE) $("exeline").innerHTML="Tool: "+esc(EXE)+"  &middot;  run with DOTNET_ROLL_FORWARD=Major (covers .NET 9-target builds)";
+  else $("exeline").innerHTML='<span class="err">JLECmd.exe not found next to this app ('+esc(dir||"app folder")+') or in C:\\ZimmermanTools</span>';
+  if(found) checkVersion(); else { LOCAL_VER=""; }
+  fetchLatest(); updateVerPill();
+  if(found){ var miss=checkDeps(); if(miss.length) setStatus("JLECmd support files missing next to the exe: "+miss.join(", "),"err"); }
+  if(!promptIfNeeded) return;
+  if(localComplete){
+    if(WEB_OK && LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0){
+      if(confirm("A newer JLECmd is available.\n\nNext to this app: v"+LOCAL_VER+"\nLatest online:   v"+LATEST_VER+"\n\nDownload the update next to the app now?")) downloadLatest();
+    }
+  } else {
+    if(WEB_OK){
+      var msg = (found ? ("JLECmd is not set up next to this app (currently using "+EXE+").\n\n") : "JLECmd.exe was not found.\n\n")
+        + "Download the latest (v"+LATEST_VER+") to a self-contained copy next to the app at:\n"+(dir||"?")+"\n\nProceed?";
+      if(confirm(msg)) downloadLatest();
+    } else if(found){
+      setStatus("Using local JLECmd ("+EXE+") — no internet to reach Zimmerman Tools, so can't verify/download the latest.","muted");
+    } else {
+      setStatus("JLECmd.exe not found next to this .hta and no internet to download it. Place JLECmd.exe (net6/net9 build) next to this .hta.","err");
+    }
+  }
+}
+function downloadLatest(){
+  var target=htaFolder()||EXE_DIR;
+  if(!target){ setStatus("Cannot determine the app folder to install into","err"); return; }
+  if(!WEB_OK && !confirm("The Zimmerman Tools site did not respond earlier (no internet?).\n\nTry downloading JLECmd from\n"+JLECMD_ZIP_URL+"\ninto\n"+target+" anyway?")) return;
+  if(WEB_OK && !confirm("Download latest JLECmd (v"+(LATEST_VER||KNOWN_LATEST_JLECMD)+") from:\n"+JLECMD_ZIP_URL+"\n\nInstall next to the app into:\n"+target+"\n\nProceed?")) return;
+  setStatus("Downloading & installing JLECmd… (give it a moment)","muted");
+  var tq=String(target).replace(/'/g,"''");
+  var ps="$ErrorActionPreference='Stop';"
+    +"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+    +"$u='"+JLECMD_ZIP_URL+"';"
+    +"$z=Join-Path $env:TEMP 'JLECmd_dl.zip';"
+    +"$x=Join-Path $env:TEMP ('JLECmd_x_'+[guid]::NewGuid().ToString('N'));"
+    +"Invoke-WebRequest -Uri $u -OutFile $z;"
+    +"Expand-Archive -Force -Path $z -DestinationPath $x;"
+    +"$exe=Get-ChildItem -Path $x -Recurse -Filter JLECmd.exe | Select-Object -First 1;"
+    +"if(-not $exe){throw 'JLECmd.exe not found in downloaded archive'};"
+    +"$src=Split-Path $exe.FullName;"
+    +"New-Item -ItemType Directory -Force -Path '"+tq+"' | Out-Null;"
+    +"Copy-Item -Path (Join-Path $src '*') -Destination '"+tq+"' -Recurse -Force;"
+    +"Remove-Item $z,$x -Recurse -Force -ErrorAction SilentlyContinue;"
+    +"Write-Output 'INSTALL_OK'";
+  try{
+    var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -Command "'+ps+'" > "__LOG__" 2>&1']);
+    appendLog("--- JLECmd download / install ---\n"+r.log);
+    if((r.log+"").indexOf("INSTALL_OK")>=0){ setStatus("JLECmd installed to "+target,"ok"); evaluateTooling(false); }
+    else setStatus("Download/install failed — see log","err");
+  }catch(e){ setStatus("Download failed: "+e.message,"err"); }
+}
+
+/* ---------- actions ---------- */
+/* JLECmd has NO console banner when it prints --version: it emits just the version number, and --version
+   short-circuits BEFORE DoWork (which is what touches Console.WindowWidth and crashes without a console).
+   So this is safe in the hidden console runBat allocates. Do NOT call the bare exe here. */
+function checkVersion(){
+  if(!EXE || !fileExists(EXE)){ LOCAL_VER=""; updateVerPill(); setStatus("JLECmd.exe not found — use 'Update / download JLECmd'","err"); return; }
+  try{
+    var r=runBat([
+      "set DOTNET_ROLL_FORWARD=Major",
+      '"'+EXE+'" --version > "__LOG__" 2>&1'
+    ]);
+    var m=r.log.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/);
+    if(m){ LOCAL_VER=m[1]; updateVerPill(); setStatus("JLECmd v"+LOCAL_VER+" detected","ok"); }
+    else { LOCAL_VER=""; updateVerPill(); setStatus("Ran JLECmd but could not parse version — see log","err"); appendLog(r.log); }
+  }catch(e){ LOCAL_VER=""; updateVerPill(); setStatus("Version check failed: "+e.message,"err"); }
+}
+function canListFolder(p){
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var e=new Enumerator(fso.GetFolder(p).Files); e.atEnd(); return true; }catch(err){ return false; }
+}
+
+function processJl(){
+  var inp=$("jlPath").value;
+  var outdir=$("outDir").value;
+  var inmode=$("inMode").value;
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(inmode==="d"){
+    if(!inp||!fso.FolderExists(inp)){ setStatus("Directory not found: "+inp,"err"); return; }
+    if(!canListFolder(inp)){ setStatus("Access denied reading "+inp+" — another user's profile needs an ELEVATED run. Relaunch as administrator, or point at a collected copy.","err"); return; }
+  }
+  else { if(!inp||!fso.FileExists(inp)){ setStatus("File not found: "+inp,"err"); return; } }
+  if(!outdir){ setStatus("Set an output directory","err"); return; }
+  if(!EXE||!fileExists(EXE)){ setStatus("JLECmd.exe not found — download it first","err"); return; }
+  var flag=(inmode==="d")?"-d":"-f";
+  var extra="";
+  if(inmode==="d" && $("optQuiet").checked) extra+=" -q";
+  if($("optMp").checked) extra+=" --mp";
+  if(inmode==="d" && $("optWithDir").checked) extra+=" --withDir";
+  if(inmode==="d" && $("optAll").checked) extra+=" --all";
+  var before=csvNameSet(outdir);
+  if(BUSY){ setStatus("A JLECmd run is already in progress — wait for it to finish.","err"); return; }
+  appendLog("Running: \""+EXE+"\" "+flag+" \""+inp+"\" --csv \""+outdir+"\""+extra
+    +"\nA console window shows progress; the app stays responsive and loads results automatically when done.");
+  BUSY=true; $("procBtn").disabled=true;
+  var binp=batEsc(inp), bout=batEsc(outdir);
+  var ctx=runBatAsync([
+    "set DOTNET_ROLL_FORWARD=Major",
+    'if not exist "'+bout+'" mkdir "'+bout+'"',
+    "echo JLECmd is processing:",
+    'echo   '+binp,
+    "echo Output: "+bout,
+    "echo This window closes automatically when finished.",
+    "echo.",
+    '"'+batEsc(EXE)+'" '+flag+' "'+binp+'" --csv "'+bout+'"'+extra+' > "__LOG__" 2>&1'
+  ], true);
+  ctx.onTick=function(s){ setStatus("JLECmd running… "+s+"s elapsed (app responsive; results load when done)","muted"); };
+  ctx.onTimeout=function(){ BUSY=false; $("procBtn").disabled=false; setStatus("JLECmd still running after 30 min — stopped watching. Check the output folder / console window.","err"); };
+  ctx.onDone=function(log){ BUSY=false; $("procBtn").disabled=false; processJlDone(log,outdir,before); };
+  setStatus("JLECmd starting…","muted");
+  window.setTimeout(function(){ pollDone(ctx); }, 1000);
+}
+function processJlDone(log,outdir,before){
+  appendLog("--- JLECmd output ---\n"+log);
+  LASTOUTDIR=outdir;
+  var all=listCsvFiles(outdir);
+  var fresh=[]; for(var i=0;i<all.length;i++){ if(!before[all[i].name]) fresh.push(all[i]); }
+  if(!fresh.length){
+    if(/denied|unauthorized/i.test(log))
+      setStatus("JLECmd was denied access to the input — an elevated run is needed for other users' profiles.","err");
+    else if(/Found 0|0 auto|0 custom/i.test(log))
+      setStatus("JLECmd found no jump-list files in that folder — check the path really holds .automaticDestinations-ms / .customDestinations-ms files.","err");
+    else
+      setStatus("JLECmd produced no new CSV — no jump-list files found, or every file failed to parse. See the log.","err");
+    populateProduced(all);
+    return;
+  }
+  var fails=(log.match(/==>/g)||[]).length;
+  var failNote = fails ? (" — note: "+fails+" file(s) skipped (empty/corrupt jump lists — routine; see log).") : "";
+  PRODUCED=fresh;
+  populateProduced(fresh);
+  // find the freshest automatic + custom pair and load BOTH as one dataset
+  var autoP=freshestOfType(fresh,/_AutomaticDestinations\.csv$/i);
+  var custP=freshestOfType(fresh,/_CustomDestinations\.csv$/i);
+  if(!autoP && !custP){
+    // single-file run may produce a differently-named CSV; just load the biggest fresh one
+    var big=fresh[0]; for(var k=1;k<fresh.length;k++){ if(fresh[k].size>big.size) big=fresh[k]; }
+    setStatus("Produced "+fresh.length+" CSV(s); loaded "+big.name+"."+failNote,"ok");
+    loadCsvFile(big.path); return;
+  }
+  var paths=[]; if(autoP) paths.push(autoP.path); if(custP) paths.push(custP.path);
+  try{ $("producedSel").value=(autoP||custP).path; }catch(e){}
+  setStatus("Produced "+fresh.length+" CSV(s); loaded "+(paths.length===2?"both (merged)":"1")+" — "+
+    (autoP?autoP.name:"")+(autoP&&custP?" + ":"")+(custP?custP.name:"")+"."+failNote,"ok");
+  loadJlPaths(paths, outdir);
+}
+function freshestOfType(list,re){ var best=null; for(var i=0;i<list.length;i++){ if(re.test(list[i].name)){ if(!best||list[i].name>best.name) best=list[i]; } } return best; }
+function csvNameSet(dir){ var o={}, l=listCsvFiles(dir); for(var i=0;i<l.length;i++) o[l[i].name]=true; return o; }
+function listCsvFiles(dir){
+  var fso=new ActiveXObject("Scripting.FileSystemObject"), out=[];
+  if(!fso.FolderExists(dir)) return out;
+  var e=new Enumerator(fso.GetFolder(dir).Files);
+  for(; !e.atEnd(); e.moveNext()){ var f=e.item(); if(/\.csv$/i.test(f.Name+"")) out.push({name:f.Name+"", path:f.Path+"", size:f.Size}); }
+  out.sort(function(a,b){ return a.name<b.name?1:(a.name>b.name?-1:0); });
+  return out;
+}
+function fmtSize(n){ if(!n) return "0 B"; var u=["B","KB","MB","GB"], i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
+function populateProduced(list){
+  var sel=$("producedSel"); sel.innerHTML="";
+  for(var i=0;i<list.length;i++){
+    var lab=list[i].name+"  ("+fmtSize(list[i].size)+")";
+    if(/_AutomaticDestinations\.csv$/i.test(list[i].name)) lab+="  —  automatic destinations";
+    else if(/_CustomDestinations\.csv$/i.test(list[i].name)) lab+="  —  custom destinations";
+    var o=document.createElement("option"); o.value=list[i].path; o.text=lab; sel.add(o);
+  }
+  showEl("producedRow", list.length>0);
+}
+function openDir(){ var d=$("outDir").value; if(!d){ setStatus("No output directory set","err"); return; }
+  try{ new ActiveXObject("WScript.Shell").Run('explorer.exe "'+d+'"',1,false); }catch(e){ setStatus("Could not open folder: "+e.message,"err"); } }
+
+/* ---------- CSV parser (RFC4180) — line-split hybrid ---------- */
+function countQuotes(s){ var c=0, idx=-1; while((idx=s.indexOf('"',idx+1))>=0) c++; return c; }
+function parseCSVLine(line){
+  if(line.indexOf('"')<0) return line.split(",");
+  var out=[], field="", q=false, i=0, n=line.length;
+  while(i<n){ var c=line.charAt(i);
+    if(q){ if(c==='"'){ if(line.charAt(i+1)==='"'){ field+='"'; i+=2; continue; } q=false; i++; continue; } field+=c; i++; continue; }
+    if(c==='"'){ q=true; i++; continue; }
+    if(c===','){ out.push(field); field=""; i++; continue; }
+    field+=c; i++;
+  }
+  out.push(field); return out;
+}
+function parseCSV(text){
+  if(text.charCodeAt(0)===0xFEFF) text=text.substring(1);
+  var lines=text.split("\n"), rows=[], i=0, n=lines.length;
+  while(i<n){
+    var line=lines[i]; i++;
+    var qc=countQuotes(line);
+    while((qc%2)===1 && i<n){ line+="\n"+lines[i]; qc+=countQuotes(lines[i]); i++; }
+    if(line.charAt(line.length-1)==='\r') line=line.substring(0,line.length-1);
+    if(line==="") continue;
+    rows.push(parseCSVLine(line));
+  }
+  return rows;
+}
+
+/* ---------- ingest dispatch ---------- */
+function headIndex(head){ var idx={}; for(var h=0;h<head.length;h++) idx[trimStr(head[h])]=h; return idx; }
+function isJlHead(idx){ return ("AppId" in idx) && ("SourceFile" in idx) && ("TargetIDAbsolutePath" in idx); }
+function jlTypeOf(idx){ return ("DestListVersion" in idx) ? "A" : "C"; }
+function jlSibling(path){
+  var b=baseName(path), dir=parentDir(path);
+  if(/_AutomaticDestinations\.csv$/i.test(b)) return dir+"\\"+b.replace(/_AutomaticDestinations\.csv$/i,"_CustomDestinations.csv");
+  if(/_CustomDestinations\.csv$/i.test(b)) return dir+"\\"+b.replace(/_CustomDestinations\.csv$/i,"_AutomaticDestinations.csv");
+  return "";
+}
+/* Load a single CSV chosen via "Load existing CSV…". If it is a JLECmd CSV, offer to pair its sibling. */
+function loadCsvFile(path){
+  try{
+    var text=readUtf8(path);
+    var raw=parseCSV(text);
+    if(!raw||!raw.length){ setStatus("Empty / unparseable CSV","err"); return; }
+    var idx=headIndex(raw[0]);
+    if(isJlHead(idx)){
+      var sib=jlSibling(path);
+      if(sib && fileExists(sib) && confirm("This looks like a JLECmd "+(jlTypeOf(idx)==="A"?"AutomaticDestinations":"CustomDestinations")+" CSV.\n\nA matching sibling was found:\n"+baseName(sib)+"\n\nLoad BOTH together as one dataset?")){
+        loadJlPaths([path, sib], parentDir(path));
+      } else {
+        loadJlPaths([path], parentDir(path));
+      }
+    } else {
+      ingestGeneric(raw, raw[0], baseName(path));
+    }
+  }catch(e){ setStatus("Could not read CSV: "+e.message,"err"); }
+}
+function cell(rw,i){ return (i>=0&&i<rw.length)?rw[i]:""; }
+function numv(v){ var x=parseFloat(v); return isFinite(x)?x:0; }
+
+/* ---------- jump-list ingest (spec §6) ---------- */
+function loadJlPaths(paths, srcDir){
+  ROWS=[];
+  var labels=[], loaded=0;
+  for(var p=0;p<paths.length;p++){
+    try{
+      var raw=parseCSV(readUtf8(paths[p]));
+      if(!raw||raw.length<1) continue;
+      var idx=headIndex(raw[0]);
+      if(!isJlHead(idx)){ continue; }
+      ingestJlRows(raw, idx, jlTypeOf(idx));
+      labels.push(baseName(paths[p])); loaded++;
+    }catch(e){ appendLog("Failed to read "+paths[p]+": "+e.message); }
+  }
+  if(!ROWS.length){
+    // fall back to a generic view of the first file so nothing is lost
+    try{ var r0=parseCSV(readUtf8(paths[0])); ingestGeneric(r0, r0[0], baseName(paths[0])); return; }
+    catch(e2){ setStatus("No jump-list rows parsed from the selected CSV(s).","err"); return; }
+  }
+  finishJlIngest(labels.join(" + "));
+}
+function ingestJlRows(raw, idx, type){
+  function gi(n){ return (n in idx)?idx[n]:-1; }
+  var iSrc=gi("SourceFile"), iSrcC=gi("SourceCreated"), iSrcM=gi("SourceModified"),
+      iAppId=gi("AppId"), iAppD=gi("AppIdDescription"),
+      iEntryNum=gi("EntryNumber"), iMRU=gi("MRU"), iIC=gi("InteractionCount"), iPin=gi("PinStatus"),
+      iEntryName=gi("EntryName"), iCreat=gi("CreationTime"), iMod=gi("LastModified"),
+      iLocal=gi("LocalPath"), iTIA=gi("TargetIDAbsolutePath"), iPath=gi("Path"), iRel=gi("RelativePath"), iCommon=gi("CommonPath"),
+      iArgs=gi("Arguments"), iWD=gi("WorkingDirectory"),
+      iTgtC=gi("TargetCreated"), iTgtM=gi("TargetModified"), iTgtA=gi("TargetAccessed"), iFS=gi("FileSize"),
+      iDrive=gi("DriveType"), iVolSer=gi("VolumeSerialNumber"), iVolLab=gi("VolumeLabel"),
+      iHost=gi("Hostname"), iMachID=gi("MachineID"), iMachMac=gi("MachineMACAddress"), iTrack=gi("TrackerCreatedOn"),
+      iMftE=gi("TargetMFTEntryNumber"), iMftS=gi("TargetMFTSequenceNumber"),
+      iAttr=gi("FileAttributes"), iFlags=gi("HeaderFlags"), iExtra=gi("ExtraBlocksPresent"), iNotes=gi("Notes"),
+      iDLV=gi("DestListVersion"), iLUE=gi("LastUsedEntryNumber");
+  for(var r=1;r<raw.length;r++){
+    var rw=raw[r]; if(rw.length<3) continue;
+    var src=cell(rw,iSrc);
+    var target=firstNonEmpty([cell(rw,iLocal), cell(rw,iTIA), cell(rw,iPath), cell(rw,iRel), cell(rw,iCommon)]);
+    if(!src && !target) continue;
+    var srcM=cell(rw,iSrcM), created=cell(rw,iCreat), modified=cell(rw,iMod);
+    var user=""; var mu=String(src).match(/\\Users\\([^\\]+)\\/i); if(mu) user=mu[1];
+    var appId=cell(rw,iAppId), appD=trimStr(cell(rw,iAppD));
+    var args=cell(rw,iArgs), wd=cell(rw,iWD);
+    // primary activity timestamp: automatic → LastModified (fall back CreationTime); custom → file mtime
+    var primaryTs = (type==="A") ? (modified||created) : srcM;
+    var rec={
+      type:type, src:src, srcName:baseName(src), srcCreated:cell(rw,iSrcC), srcModified:srcM,
+      user:user||"", appId:appId, appD:appD, appLabel:(appD||("unknown ("+appId+")")),
+      entryNum:cell(rw,iEntryNum), mru:cell(rw,iMRU), interactionCount:cell(rw,iIC), pinStatus:cell(rw,iPin),
+      lastUsed:cell(rw,iLUE), destListVer:cell(rw,iDLV), entryName:cell(rw,iEntryName),
+      created:created, modified:modified,
+      target:target, targetExt:extOf(target),
+      args:args, workingDir:wd, relativePath:cell(rw,iRel), commonPath:cell(rw,iCommon),
+      tgtCreated:cell(rw,iTgtC), tgtModified:cell(rw,iTgtM), tgtAccessed:cell(rw,iTgtA), fileSize:cell(rw,iFS),
+      driveType:cell(rw,iDrive), volSerial:cell(rw,iVolSer), volLabel:cell(rw,iVolLab),
+      hostname:cell(rw,iHost), machineId:cell(rw,iMachID), machineMac:cell(rw,iMachMac), trackerCreated:cell(rw,iTrack),
+      mftEntry:cell(rw,iMftE), mftSeq:cell(rw,iMftS),
+      fileAttrs:cell(rw,iAttr), headerFlags:cell(rw,iFlags), extraBlocks:cell(rw,iExtra), notes:cell(rw,iNotes),
+      primaryTs:primaryTs, msPrim:msOf(primaryTs), dayPrim:dayOf(primaryTs),
+      tags:[], reasons:[], score:0, sus:false, foreign:false
+    };
+    rec.targetL=String(target).toLowerCase();
+    rec.argsL=String(args).toLowerCase();
+    rec.wdL=String(wd).toLowerCase();
+    rec.commonL=String(rec.commonPath).toLowerCase();
+    rec.blob=(target+" "+args+" "+appD+" "+appId+" "+src+" "+wd+" "+user+" "+rec.machineId).toLowerCase();
+    ROWS.push(rec);
+  }
+}
+function finishJlIngest(srcLabel){
+  buildHostAnchor();
+  buildApps();
+  rescoreAll();
+  buildEvents();
+  setMode("jl");
+  var users=[]; for(var i=0;i<ROWS.length;i++){ if(ROWS[i].user) users.push(ROWS[i].user); }
+  populateUserFilter(distinctVals(users));
+  $("results").className="";
+  var distSrc=distinctVals((function(){var a=[];for(var j=0;j<ROWS.length;j++)a.push(ROWS[j].src);return a;})()).length;
+  $("srcpill").innerHTML=nf(ROWS.length)+" entries &middot; "+nf(distSrc)+" jump-list files &middot; "+esc(srcLabel);
+  QUERY=""; $("q").value=""; DFROM=0; DTO=0; $("dfrom").value=""; $("dto").value=""; APPFILTER="";
+  CURCAT="all"; highlightCat();
+  SORTKEY=6; SORTDIR=-1; TSORTKEY=1; TSORTDIR=-1; ASORTKEY=3; ASORTDIR=-1;
+  setView("entries", true);
+  closeDetail();
+  setStatus("Loaded "+nf(ROWS.length)+" jump-list entries ("+nf(EVENTS.length)+" activity events)","ok");
+  render();
+}
+function buildHostAnchor(){
+  var counts={}, i, id, best="", bestN=0;
+  for(i=0;i<ROWS.length;i++){ id=trimStr(ROWS[i].machineId); if(!id) continue;
+    counts[id]=(counts[id]||0)+1; if(counts[id]>bestN){ bestN=counts[id]; best=id; } }
+  HOMEHOST=best;
+}
+
+/* ---------- suspicion scoring (spec §8, J1–J10) ---------- */
+function inStaging(pL){ if(!pL) return false;
+  for(var j=0;j<NOTSTAGING.length;j++){ if(pL.indexOf(NOTSTAGING[j])>=0) return false; }   // legit per-user roots first
+  for(var i=0;i<STAGING.length;i++){ if(pL.indexOf(STAGING[i])>=0) return true; } return false; }
+function isUnc(pL){ return pL && pL.substring(0,2)==="\\\\"; }
+function isAdminShare(pL){ return /^\\\\[^\\]+\\[a-z]\$/i.test(pL); }
+function rescoreAll(){ for(var i=0;i<ROWS.length;i++) scoreRec(ROWS[i]); }
+function scoreRec(rec){
+  var tags=[], reasons=[], score=0;
+  var tL=rec.targetL, aL=rec.argsL, wL=rec.wdL;
+  // J8 foreign: tracker MachineID differs from the dataset's home host
+  rec.foreign=(HOMEHOST && rec.machineId && trimStr(rec.machineId).toLowerCase()!==HOMEHOST.toLowerCase());
+  // J1 staging path (target or working dir)
+  var h1=inStaging(tL) || inStaging(wL);
+  if(h1){ score+=2; tags.push("USERPATH"); reasons.push("Target/working-dir under a staging path: "+(rec.target||rec.workingDir)); }
+  // J2 downloads (kept separate)
+  if(tL.indexOf("\\downloads\\")>=0){ score+=1; tags.push("DOWNLOADS"); reasons.push("Target under a Downloads folder"); }
+  // J3 executable / script extension
+  if(EXEC_EXT[rec.targetExt]){ score+=1; tags.push("EXEC"); reasons.push("Executable/script target (."+rec.targetExt+")");
+    if(h1){ score+=1; reasons.push("Executable/script running from a staging path"); } }
+  // J4 arguments present
+  var hasArgs=trimStr(rec.args)!=="";
+  if(hasArgs){ score+=1; tags.push("ARGS"); reasons.push("LNK carries arguments"); }
+  // J5 hot arguments
+  if(hasArgs){ var hot=[]; for(var k=0;k<ARGS_HOT.length;k++){ if(aL.indexOf(ARGS_HOT[k])>=0) hot.push(trimStr(ARGS_HOT[k])||"\\\\"); }
+    if(hot.length){ score+=2; tags.push("ARGS-HOT"); reasons.push("Suspicious argument token(s): "+hot.join(", ")); } }
+  // J6 remote / removable / UNC / admin share
+  var rem=/removable/i.test(rec.driveType) || isUnc(tL) || isUnc(rec.commonL);
+  if(rem){ score+=1; tags.push("REMOTE"); reasons.push("Removable-media or UNC target ("+esc(rec.driveType||"")+")");
+    if(isAdminShare(tL)||isAdminShare(rec.commonL)){ score+=1; reasons.push("Administrative share (\\\\host\\C$)"); } }
+  // J7 archive / container
+  if(ARCHIVE_EXT[rec.targetExt]){ score+=1; tags.push("ARCHIVE"); reasons.push("Archive/container target (."+rec.targetExt+")"); }
+  // J8 foreign host
+  if(rec.foreign){ score+=1; tags.push("FOREIGN"); reasons.push("Tracker MachineID '"+rec.machineId+"' differs from dataset host '"+HOMEHOST+"'"); }
+  // J9 IOC / keyword
+  if(IOCS.length){ var hits=[], t;
+    for(t=0;t<IOCS.length;t++){ if(rec.blob.indexOf(IOCS[t])>=0){ hits.push(IOCS[t]); if(hits.length>=3) break; } }
+    if(hits.length){ score+=3; tags.push("IOC"); reasons.push("IOC/keyword hit: "+hits.join(", ")); } }
+  // J10 unknown app + already interesting
+  if(!rec.appD && tags.length){ score+=1; tags.push("UNKNOWN-APP"); reasons.push("Unknown AppId ("+rec.appId+") on an already-flagged entry"); }
+  rec.tags=tags; rec.reasons=reasons; rec.score=score; rec.sus=(score>=2);
+}
+
+/* ---------- applications rollup ---------- */
+function buildApps(){
+  var map={}, i, r, k;
+  for(i=0;i<ROWS.length;i++){ r=ROWS[i]; k=r.appId||("("+r.appLabel+")");
+    var a=map[k]; if(!a){ a=map[k]={appId:r.appId, appLabel:r.appLabel, appD:r.appD, count:0, tA:0, tC:0,
+      targets:{}, users:{}, minMs:0, maxMs:0, sus:0}; }
+    a.count++; if(r.type==="A") a.tA++; else a.tC++;
+    if(r.target) a.targets[r.targetL]=1;
+    if(r.user) a.users[r.user]=1;
+    if(r.sus) a.sus++;
+    if(r.msPrim){ if(!a.minMs||r.msPrim<a.minMs) a.minMs=r.msPrim; if(r.msPrim>a.maxMs) a.maxMs=r.msPrim; }
+  }
+  APPS=[]; for(k in map){ if(map[k].hasOwnProperty){ var a2=map[k];
+    var dt=0,u=0,x; for(x in a2.targets){ if(a2.targets.hasOwnProperty(x)) dt++; }
+    for(x in a2.users){ if(a2.users.hasOwnProperty(x)) u++; }
+    a2.distinctTargets=dt; a2.userCount=u; APPS.push(a2); } }
+}
+
+/* ---------- timeline events (spec §7) ---------- */
+function mkEv(ts, kind, rec){ return {t:ts, ms:msOf(ts), day:dayOf(ts), kind:kind, rec:rec}; }
+function buildEvents(){
+  EVENTS=[]; var seenCustom={}, i, r;
+  for(i=0;i<ROWS.length;i++){ r=ROWS[i];
+    if(r.type==="A"){
+      var c=r.created, m=r.modified;
+      if(c && m && c===m){ EVENTS.push(mkEv(m,"opened",r)); }
+      else { if(c) EVENTS.push(mkEv(c,"first opened",r)); if(m) EVENTS.push(mkEv(m,"last opened",r)); }
+    } else {
+      if(!seenCustom[r.src]){ seenCustom[r.src]=1; if(r.srcModified) EVENTS.push(mkEv(r.srcModified,"app activity (custom)",r)); }
+    }
+  }
+}
+
+/* ---------- overview ---------- */
+function topList(obj,n){ var a=[],k; for(k in obj){ if(obj.hasOwnProperty(k)) a.push([k,obj[k]]); }
+  a.sort(function(x,y){ return y[1]-x[1]; }); return a.slice(0,n); }
+function stat(n,l){ return '<span class="stat"><span class="n">'+esc(n)+'</span><span class="l">'+esc(l)+'</span></span>'; }
+function bar(label,frac,val,app){
+  var lc=app?' lnk" data-app="'+esc(app):'';
+  return '<div class="brow"><span class="blab'+lc+'" title="'+esc(label)+'">'+esc(label)+'</span>'
+    +'<span class="btrack"><span class="bfill" style="width:'+(frac*100).toFixed(1)+'%"></span></span>'
+    +'<span class="bval">'+esc(val)+'</span></div>';
+}
+function listRow(label,val,q,cls){
+  var lc=q?' lnk" data-q="'+esc(q):'';
+  return '<div class="brow"><span class="blab'+lc+'" title="'+esc(label)+'" style="width:52%">'+esc(label)+'</span>'
+    +'<span class="bval" style="width:44%;'+(cls||"")+'">'+esc(val)+'</span></div>';
+}
+function fmtShortTs(s){ var m=String(s).match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/); return m?(m[1]+" "+m[2]):String(s); }
+function msToTs(ms){ var d=new Date(ms); function p(x){return (x<10?"0":"")+x;}
+  return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+" "+p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds()); }
+function hasTag(r,t){ for(var i=0;i<r.tags.length;i++){ if(r.tags[i]===t) return true; } return false; }
+function renderJlAgg(rows){
+  var i, r, apps={}, users={}, srcs={}, susN=0, iocN=0, minMs=0, maxMs=0;
+  for(i=0;i<rows.length;i++){ r=rows[i];
+    apps[r.appLabel]=(apps[r.appLabel]||0)+1;
+    if(r.user) users[r.user]=1;
+    srcs[r.src]=1;
+    if(r.sus) susN++;
+    if(hasTag(r,"IOC")) iocN++;
+    if(r.msPrim){ if(!minMs||r.msPrim<minMs) minMs=r.msPrim; if(r.msPrim>maxMs) maxMs=r.msPrim; }
+  }
+  var distApps=0,distUsers=0,distSrc=0,k;
+  for(k in apps){ if(apps.hasOwnProperty(k)) distApps++; }
+  for(k in users){ if(users.hasOwnProperty(k)) distUsers++; }
+  for(k in srcs){ if(srcs.hasOwnProperty(k)) distSrc++; }
+  var rng=(minMs? (fmtShortTs(msToTs(minMs))+" → "+fmtShortTs(msToTs(maxMs))) : "—");
+  $("statbar").innerHTML=
+    stat(nf(rows.length),"entries")+stat(nf(distSrc),"jump-list files")+stat(nf(distApps),"applications")+
+    stat(nf(distUsers),"users")+stat(nf(susN),"suspicious")+(IOCS.length?stat(nf(iocN),"IOC hits"):"")+
+    '<span class="stat" style="min-width:260px"><span class="n" style="font-size:12px">'+esc(rng)+'</span><span class="l">activity range (UTC)</span></span>';
+  // col 1: top applications by entries (map label->appId for click filter)
+  var lab2app={}; for(i=0;i<rows.length;i++){ lab2app[rows[i].appLabel]=rows[i].appId; }
+  var top=topList(apps,12), h="", max=top.length?top[0][1]:1;
+  for(i=0;i<top.length;i++){ h+=bar(top[i][0], max?top[i][1]/max:0, nf(top[i][1]), lab2app[top[i][0]]||""); }
+  $("jlTopApps").innerHTML=h||'<span class="muted">none</span>';
+  // col 2: most recent activity
+  var byNew=rows.slice(0); byNew.sort(function(a,b){ return b.msPrim-a.msPrim; });
+  h=""; for(i=0;i<byNew.length&&i<12;i++){ r=byNew[i]; h+=listRow(baseName(r.target)||r.appLabel, fmtShortTs(r.primaryTs), r.target||r.appLabel); }
+  $("jlTopRecent").innerHTML=h||'<span class="muted">none</span>';
+  // col 3: suspicious targets
+  var sus=[]; for(i=0;i<rows.length;i++){ if(rows[i].sus) sus.push(rows[i]); }
+  sus.sort(function(a,b){ return b.score-a.score || b.msPrim-a.msPrim; });
+  h=""; for(i=0;i<sus.length&&i<12;i++){ r=sus[i];
+    h+=listRow((baseName(r.target)||r.appLabel)+"  ["+r.tags.join(",")+"]", "score "+r.score, r.target||r.appLabel, "color:#ff6b6b"); }
+  $("jlTopSus").innerHTML=h||'<span class="ok">No suspicious entries</span>';
+}
+
+/* ---------- tags ---------- */
+function tagClass(g){
+  if(g==="USERPATH") return "usr";
+  if(g==="EXEC") return "lol";
+  if(g==="REMOTE"||g==="FOREIGN") return "rare";
+  if(g==="IOC"||g==="ARGS-HOT") return "ioc";
+  return "gen";
+}
+function tagHtml(r){
+  var t="",i;
+  if(r.sus) t+='<span class="tag sus" title="'+esc(r.reasons.join("; "))+'">SUS '+r.score+'</span>';
+  for(i=0;i<r.tags.length;i++){ var g=r.tags[i];
+    t+='<span class="tag '+tagClass(g)+'" title="'+esc(r.reasons.join("; "))+'">'+esc(g)+'</span>'; }
+  return t;
+}
+function driveShort(s){ s=String(s); if(!s) return ""; var m=s.match(/^(\w+)/); return m?m[1]:s; }
+function typeTag(r){ return r.type==="A" ? '<span class="tag ta">A</span>' : '<span class="tag tc">C</span>'; }
+
+/* ---------- entries table ---------- */
+var COLS=[
+  {h:"Tags", sk:function(r){return -r.score;}, cell:function(r){return '<td class="first">'+tagHtml(r)+'</td>';}},
+  {h:"T", sk:function(r){return r.type;}, cell:function(r){return '<td title="'+(r.type==="A"?"AutomaticDestinations":"CustomDestinations")+'">'+typeTag(r)+'</td>';}},
+  {h:"User", sk:function(r){return r.user.toLowerCase();}, cell:function(r){return '<td class="mono" title="'+esc(r.user)+'">'+esc(r.user||"—")+'</td>';}},
+  {h:"Application", sk:function(r){return r.appLabel.toLowerCase();}, cell:function(r){return '<td class="lnk" data-app="'+esc(r.appId)+'" title="'+esc(r.appLabel)+' ('+esc(r.appId)+')">'+esc(r.appLabel)+'</td>';}},
+  {h:"Target", sk:function(r){return r.targetL;}, cell:function(r){return '<td class="mono lnk" data-q="'+esc(baseName(r.target))+'" title="'+esc(r.target)+'">'+esc(r.target||"—")+'</td>';}},
+  {h:"Arguments", sk:function(r){return r.argsL;}, cell:function(r){return '<td class="mono" title="'+esc(r.args)+'">'+esc(r.args)+'</td>';}},
+  {h:"Activity (UTC)", sk:function(r){return r.msPrim;}, cell:function(r){return '<td class="mono" title="automatic: LastModified; custom: file mtime">'+esc(r.primaryTs)+'</td>';}},
+  {h:"Created (UTC)", sk:function(r){return msOf(r.created);}, cell:function(r){return '<td class="mono muted">'+esc(r.created)+'</td>';}},
+  {h:"Int", sk:function(r){return numv(r.interactionCount);}, cell:function(r){return '<td class="mono" style="text-align:right" title="InteractionCount">'+esc(r.interactionCount)+'</td>';}},
+  {h:"MRU", sk:function(r){return numv(r.mru);}, cell:function(r){return '<td class="mono muted" style="text-align:right">'+esc(r.mru)+'</td>';}},
+  {h:"Drive", sk:function(r){return r.driveType;}, cell:function(r){return '<td class="muted" title="'+esc(r.driveType)+'">'+esc(driveShort(r.driveType))+'</td>';}},
+  {h:"Host", sk:function(r){return (r.machineId||r.hostname).toLowerCase();}, cell:function(r){var hv=r.machineId||r.hostname; return '<td class="mono muted'+(r.foreign?' hl-ioc':'')+'" title="MachineID '+esc(r.machineId)+' / Hostname '+esc(r.hostname)+'">'+esc(hv)+'</td>';}},
+  {h:"Source", sk:function(r){return r.srcName.toLowerCase();}, cell:function(r){return '<td class="mono muted" title="'+esc(r.src)+'">'+esc(r.srcName)+'</td>';}}
+];
+function passCat(r){
+  if(CURCAT==="sus"&&!r.sus) return false;
+  if(CURCAT==="userpath"&&!hasTag(r,"USERPATH")) return false;
+  if(CURCAT==="exec"&&!hasTag(r,"EXEC")) return false;
+  if(CURCAT==="remote"&&!hasTag(r,"REMOTE")) return false;
+  if(CURCAT==="archive"&&!hasTag(r,"ARCHIVE")) return false;
+  if(CURCAT==="args"&&!(hasTag(r,"ARGS")||hasTag(r,"ARGS-HOT"))) return false;
+  if(CURCAT==="ioc"&&!hasTag(r,"IOC")) return false;
+  return true;
+}
+function filteredJl(){
+  var out=[];
+  for(var i=0;i<ROWS.length;i++){ var r=ROWS[i];
+    if(!passCat(r)) continue;
+    if(APPFILTER && r.appId!==APPFILTER) continue;
+    if(USERFILTER && r.user!==USERFILTER) continue;
+    if(DFROM&&(!r.dayPrim||r.dayPrim<DFROM)) continue;
+    if(DTO&&(!r.dayPrim||r.dayPrim>DTO)) continue;
+    if(QUERY){ if(r.blob.indexOf(QUERY)<0) continue; }
+    out.push(r);
+  }
+  return out;
+}
+function updateCatCounts(){
+  var c={all:ROWS.length,sus:0,userpath:0,exec:0,remote:0,archive:0,args:0,ioc:0};
+  for(var i=0;i<ROWS.length;i++){ var r=ROWS[i];
+    if(r.sus)c.sus++; if(hasTag(r,"USERPATH"))c.userpath++; if(hasTag(r,"EXEC"))c.exec++;
+    if(hasTag(r,"REMOTE"))c.remote++; if(hasTag(r,"ARCHIVE"))c.archive++;
+    if(hasTag(r,"ARGS")||hasTag(r,"ARGS-HOT"))c.args++; if(hasTag(r,"IOC"))c.ioc++; }
+  var names={all:"All",sus:"Suspicious",userpath:"User-path",exec:"Exec-Script",remote:"Remote-Removable",archive:"Archives",args:"Args",ioc:"IOC hits"};
+  var bs=$("jlCats").getElementsByTagName("button");
+  for(var j=0;j<bs.length;j++){ var k=bs[j].getAttribute("data-cat");
+    if(k) bs[j].innerHTML=names[k]+" ("+nf(c[k])+")"; }
+}
+function highlightCat(){
+  var bs=$("jlCats").getElementsByTagName("button");
+  for(var j=0;j<bs.length;j++){ if(bs[j].getAttribute("data-cat")) bs[j].className=(bs[j].getAttribute("data-cat")===CURCAT)?"btn on":"btn"; }
+}
+function setView(v, quiet){
+  VIEW=v;
+  $("vEntries").className=(v==="entries")?"btn on":"btn";
+  $("vTime").className=(v==="time")?"btn on":"btn";
+  $("vApps").className=(v==="apps")?"btn on":"btn";
+  $("tableTitle").innerHTML=(v==="time")?"Activity timeline":((v==="apps")?"Applications":"Entries");
+  showEl("jlCats", v!=="apps");     // category tags don't apply to the app rollup
+  if(!quiet) render();
+}
+function render(){
+  if(MODE==="generic"){ renderGeneric(); return; }
+  if(VIEW==="time"){ renderTime(); return; }
+  if(VIEW==="apps"){ renderApps(); return; }
+  if(!ROWS.length) return;
+  var rows=filteredJl();
+  renderJlAgg(rows);
+  updateCatCounts();
+  var sk=COLS[SORTKEY].sk, dir=SORTDIR;
+  rows.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var html="<thead><tr>";
+  for(var c=0;c<COLS.length;c++){
+    var arrow=(SORTKEY===c)?(SORTDIR>0?" ▲":" ▼"):"";
+    html+='<th data-k="'+c+'">'+esc(COLS[c].h)+arrow+'</th>';
+  }
+  html+="</tr></thead><tbody>";
+  for(var i=0;i<shown;i++){
+    var r=rows[i];
+    html+='<tr data-i="'+i+'"'+(r.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<COLS.length;k++){ html+=COLS[k].cell(r); }
+    html+="</tr>";
+  }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"")+(APPFILTER?(" &middot; app filter active"):"");
+  wireHeaders();
+  applyFreeze();
+  setupColResize();
+  window.__viewRows=rows;
+}
+function wireHeaders(){
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var i=0;i<ths.length;i++){ ths[i].onclick=function(e){
+    e=e||window.event; var t=e.target||e.srcElement;
+    if(t && /\bcgrip\b/.test(t.className+"")) return;   // resize-grip interactions must not sort
+    var k=parseInt(this.getAttribute("data-k"),10);
+    if(SORTKEY===k) SORTDIR*=-1; else { SORTKEY=k; SORTDIR=1; }
+    render();
+  }; }
+}
+function applyFreeze(){
+  var sc=$("tblScroll"); if(!sc) return;
+  var ths=$("tbl").getElementsByTagName("th"); var y=sc.scrollTop;
+  for(var i=0;i<ths.length;i++){ ths[i].style.top=y+"px"; }
+}
+
+/* ---------- settings sidecar (currently: per-view column widths) ----------
+   Tiny JSON next to the .hta; silently a no-op where the folder is unwritable. */
+var SETTINGS={};
+function settingsPath(){ var d=htaFolder(); return d?(d+"\\JLECmd-Wrapper.settings.json"):""; }
+function loadSettings(){
+  try{ var p=settingsPath();
+    if(p && fileExists(p)){ var o=JSON.parse(readUtf8(p)); if(o && typeof o==="object") SETTINGS=o; }
+  }catch(e){ SETTINGS={}; }
+  if(!SETTINGS) SETTINGS={};
+  if(SETTINGS.colw && typeof SETTINGS.colw==="object") COLW=SETTINGS.colw;
+}
+function saveSettings(){ try{ var p=settingsPath(); if(p) writeUtf8(p, JSON.stringify(SETTINGS)); }catch(e){} }
+
+/* ---------- resizable columns (ported from PECmd-Wrapper v0.5.0 / DFIR-Artifact-Finder v0.2.1) ----------
+   Drag a header's right edge to resize; double-click the edge to reset the view's widths. Widths are
+   stored per view ({entries:[..], time:[..], apps:[..], generic:[..]}) because each view has its own
+   column set; a stored array whose length no longer matches the header count is ignored (auto-reset). */
+var COLW={};
+var DRAG=null;
+function colwKey(){ return (MODE==="generic")?"generic":VIEW; }   // VIEW = entries | time | apps
+function curZoom(){
+  try{ var el=$("content");
+    var z=parseFloat(el.style.zoom||(el.currentStyle&&el.currentStyle.zoom)||"");
+    if(!z && window.getComputedStyle) z=parseFloat(getComputedStyle(el).zoom);
+    return (z&&z>0)?z:1;
+  }catch(e){ return 1; }
+}
+function setupColResize(){
+  var tbl=$("tbl"); if(!tbl) return;
+  var ths=tbl.getElementsByTagName("th"); if(!ths.length) return;
+  var key=colwKey(), w=COLW[key];
+  if(w && w.length===ths.length){
+    tbl.style.tableLayout="fixed"; tbl.style.width="auto";
+    for(var j=0;j<ths.length;j++) ths[j].style.width=w[j]+"px";
+  } else {
+    tbl.style.tableLayout=""; tbl.style.width="";   // one table shared by all views — undo a previous view's fixed layout
+  }
+  for(var i=0;i<ths.length;i++){
+    var g=document.createElement("div");
+    g.className="cgrip"; g.setAttribute("data-ci",String(i));
+    g.title="Drag to resize column — double-click to reset all widths";
+    g.onmousedown=gripDown; g.ondblclick=gripReset;
+    ths[i].appendChild(g);
+  }
+}
+function gripDown(e){
+  e=e||window.event;
+  var ci=parseInt(this.getAttribute("data-ci"),10);
+  var tbl=$("tbl"), ths=tbl.getElementsByTagName("th");
+  if(isNaN(ci)||ci<0||ci>=ths.length) return false;
+  var key=colwKey(), w=COLW[key];
+  if(!w || w.length!==ths.length){          // first drag: freeze the browser's current widths
+    w=[]; for(var i=0;i<ths.length;i++) w.push(ths[i].offsetWidth);
+    COLW[key]=w;
+    tbl.style.tableLayout="fixed"; tbl.style.width="auto";
+    for(var j=0;j<ths.length;j++) ths[j].style.width=w[j]+"px";
+  }
+  DRAG={key:key, ci:ci, x:(e.clientX||0), w:w[ci], th:ths[ci], z:curZoom()};
+  document.onmousemove=gripMove; document.onmouseup=gripUp;
+  document.onselectstart=function(){ return false; };
+  if(e.preventDefault) e.preventDefault(); e.returnValue=false;
+  if(e.stopPropagation) e.stopPropagation(); e.cancelBubble=true;
+  return false;
+}
+function gripMove(e){
+  e=e||window.event; if(!DRAG) return false;
+  var w=Math.round(DRAG.w+((e.clientX||0)-DRAG.x)/DRAG.z);
+  if(w<40) w=40; if(w>1600) w=1600;
+  COLW[DRAG.key][DRAG.ci]=w; DRAG.th.style.width=w+"px";
+  return false;
+}
+function gripUp(){
+  document.onmousemove=null; document.onmouseup=null; document.onselectstart=null;
+  if(DRAG){ DRAG=null; SETTINGS.colw=COLW; try{ saveSettings(); }catch(e){} }
+}
+function gripReset(e){
+  e=e||window.event;
+  document.onmousemove=null; document.onmouseup=null; document.onselectstart=null; DRAG=null;
+  COLW[colwKey()]=null; SETTINGS.colw=COLW; try{ saveSettings(); }catch(er){}
+  var tbl=$("tbl"); if(tbl){ tbl.style.tableLayout=""; tbl.style.width=""; }
+  render();
+  setStatus("Column widths reset","ok");
+  if(e){ if(e.stopPropagation) e.stopPropagation(); e.cancelBubble=true; }
+  return false;
+}
+
+/* ---------- timeline view ---------- */
+var TCOLS=[
+  {h:"Tags", sk:function(ev){return -ev.rec.score;}, cell:function(ev){return '<td class="first">'+tagHtml(ev.rec)+'</td>';}},
+  {h:"Time (UTC)", sk:function(ev){return ev.ms;}, cell:function(ev){return '<td class="mono">'+esc(ev.t)+'</td>';}},
+  {h:"Event", sk:function(ev){return ev.kind;}, cell:function(ev){return '<td class="muted">'+esc(ev.kind)+'</td>';}},
+  {h:"User", sk:function(ev){return ev.rec.user.toLowerCase();}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.user)+'">'+esc(ev.rec.user||"—")+'</td>';}},
+  {h:"Application", sk:function(ev){return ev.rec.appLabel.toLowerCase();}, cell:function(ev){return '<td title="'+esc(ev.rec.appLabel)+'">'+esc(ev.rec.appLabel)+'</td>';}},
+  {h:"Target", sk:function(ev){return ev.rec.targetL;}, cell:function(ev){return '<td class="mono lnk" data-q="'+esc(baseName(ev.rec.target))+'" title="'+esc(ev.rec.target)+'">'+esc(ev.rec.target||"—")+'</td>';}}
+];
+function filteredTime(){
+  var out=[];
+  for(var i=0;i<EVENTS.length;i++){ var ev=EVENTS[i], r=ev.rec;
+    if(!passCat(r)) continue;
+    if(APPFILTER && r.appId!==APPFILTER) continue;
+    if(USERFILTER && r.user!==USERFILTER) continue;
+    if(DFROM&&(!ev.day||ev.day<DFROM)) continue;
+    if(DTO&&(!ev.day||ev.day>DTO)) continue;
+    if(QUERY){ if(r.blob.indexOf(QUERY)<0) continue; }
+    out.push(ev);
+  }
+  return out;
+}
+function renderTime(){
+  if(!EVENTS.length) return;
+  var evs=filteredTime();
+  // aggregate over the underlying records (distinct)
+  var recs=[], tok={}, i;
+  for(i=0;i<evs.length;i++){ if(evs[i].rec.__tok!==tok){ evs[i].rec.__tok=tok; recs.push(evs[i].rec); } }
+  renderJlAgg(recs);
+  updateCatCounts();
+  var sk=TCOLS[TSORTKEY].sk, dir=TSORTDIR;
+  evs.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var shown=evs.length>MAXROWS?MAXROWS:evs.length;
+  var html="<thead><tr>";
+  for(var c=0;c<TCOLS.length;c++){
+    var arrow=(TSORTKEY===c)?(TSORTDIR>0?" ▲":" ▼"):"";
+    html+='<th data-k="'+c+'">'+esc(TCOLS[c].h)+arrow+'</th>';
+  }
+  html+="</tr></thead><tbody>";
+  for(i=0;i<shown;i++){
+    var ev=evs[i];
+    html+='<tr data-i="'+i+'"'+(ev.rec.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<TCOLS.length;k++){ html+=TCOLS[k].cell(ev); }
+    html+="</tr>";
+  }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(evs.length)+" events"+(shown<evs.length?(" (showing "+nf(shown)+")"):"");
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(e){
+    e=e||window.event; var t=e.target||e.srcElement;
+    if(t && /\bcgrip\b/.test(t.className+"")) return;
+    var kk=parseInt(this.getAttribute("data-k"),10);
+    if(TSORTKEY===kk) TSORTDIR*=-1; else { TSORTKEY=kk; TSORTDIR=1; }
+    renderTime();
+  }; }
+  applyFreeze();
+  setupColResize();
+  window.__viewRows=evs;
+}
+
+/* ---------- applications view ---------- */
+var ACOLS=[
+  {h:"Application", sk:function(a){return a.appLabel.toLowerCase();}, cell:function(a){return '<td class="lnk" data-app="'+esc(a.appId)+'" title="'+esc(a.appId)+'">'+esc(a.appLabel)+(a.sus?(' <span class="tag sus">'+a.sus+' sus</span>'):'')+'</td>';}},
+  {h:"Types", sk:function(a){return a.tA*1000+a.tC;}, cell:function(a){return '<td class="muted">'+(a.tA?('A:'+a.tA):'')+(a.tA&&a.tC?' ':'')+(a.tC?('C:'+a.tC):'')+'</td>';}},
+  {h:"AppId", sk:function(a){return String(a.appId).toLowerCase();}, cell:function(a){return '<td class="mono muted">'+esc(a.appId)+'</td>';}},
+  {h:"Entries", sk:function(a){return a.count;}, cell:function(a){return '<td class="mono" style="text-align:right">'+esc(nf(a.count))+'</td>';}},
+  {h:"Distinct targets", sk:function(a){return a.distinctTargets;}, cell:function(a){return '<td class="mono" style="text-align:right">'+esc(nf(a.distinctTargets))+'</td>';}},
+  {h:"Users", sk:function(a){return a.userCount;}, cell:function(a){return '<td class="mono" style="text-align:right">'+esc(a.userCount)+'</td>';}},
+  {h:"First (UTC)", sk:function(a){return a.minMs;}, cell:function(a){return '<td class="mono muted">'+esc(a.minMs?msToTs(a.minMs):"—")+'</td>';}},
+  {h:"Last (UTC)", sk:function(a){return a.maxMs;}, cell:function(a){return '<td class="mono">'+esc(a.maxMs?msToTs(a.maxMs):"—")+'</td>';}}
+];
+function renderApps(){
+  if(!APPS.length) return;
+  renderJlAgg(ROWS);   // overview reflects the whole set in app view
+  updateCatCounts();
+  var list=APPS.slice(0);
+  var sk=ACOLS[ASORTKEY].sk, dir=ASORTDIR;
+  list.sort(function(a,b){ var x=sk(a),y=sk(b);
+    if(typeof x==="number"&&typeof y==="number") return (x-y)*dir;
+    x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
+  var html="<thead><tr>";
+  for(var c=0;c<ACOLS.length;c++){
+    var arrow=(ASORTKEY===c)?(ASORTDIR>0?" ▲":" ▼"):"";
+    html+='<th data-k="'+c+'">'+esc(ACOLS[c].h)+arrow+'</th>';
+  }
+  html+="</tr></thead><tbody>";
+  for(var i=0;i<list.length;i++){
+    var a=list[i];
+    html+='<tr'+(a.sus?' class="sus"':'')+' style="cursor:pointer">';
+    for(var k=0;k<ACOLS.length;k++){ html+=ACOLS[k].cell(a); }
+    html+="</tr>";
+  }
+  html+="</tbody>";
+  $("tbl").innerHTML=html;
+  $("count").innerHTML=nf(list.length)+" applications";
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var j=0;j<ths.length;j++){ ths[j].onclick=function(e){
+    e=e||window.event; var t=e.target||e.srcElement;
+    if(t && /\bcgrip\b/.test(t.className+"")) return;
+    var kk=parseInt(this.getAttribute("data-k"),10);
+    if(ASORTKEY===kk) ASORTDIR*=-1; else { ASORTKEY=kk; ASORTDIR=1; }
+    renderApps();
+  }; }
+  applyFreeze();
+  setupColResize();
+  window.__viewRows=list;
+}
+
+/* ---------- detail pane ---------- */
+function hlClassFor(entryL){
+  for(var t=0;t<IOCS.length;t++){ if(entryL.indexOf(IOCS[t])>=0) return "hl-ioc"; }
+  if(inStaging(entryL)) return "hl-user";
+  return "";
+}
+function kv(label,val,mono){ if(val==null||trimStr(val)==="") return "";
+  return '<div class="kv"><b>'+esc(label)+'</b><span class="'+(mono?"mono":"")+'">'+esc(val)+'</span></div>'; }
+function renderDetail(rec){
+  DETREC=rec;
+  var tgtHl=hlClassFor(rec.targetL);
+  var h='<div class="mono" style="font-size:14px;margin-bottom:6px">'+typeTag(rec)+' <b class="'+(tgtHl||"")+'">'+esc(rec.target||"(no target path)")+'</b></div>';
+  h+='<div style="margin-bottom:6px">'+tagHtml(rec)+'</div>';
+  if(rec.reasons.length){ h+='<div style="font-size:12px;color:#ff9b9b;margin-bottom:6px">';
+    for(var q=0;q<rec.reasons.length;q++) h+="&bull; "+esc(rec.reasons[q])+"<br>"; h+='</div>'; }
+  h+='<h3>Application &amp; entry</h3>';
+  h+=kv("Application", rec.appLabel);
+  h+=kv("AppId", rec.appId, true);
+  h+=kv("User (derived)", rec.user);
+  h+=kv("Entry name", rec.entryName);
+  h+=kv("Arguments", rec.args, true);
+  h+=kv("Working directory", rec.workingDir, true);
+  h+=kv("MRU position", rec.mru, true);
+  h+=kv("Interaction count", rec.interactionCount, true);
+  h+=kv("Pin status", rec.pinStatus);
+  h+=kv("Entry number", rec.entryNum, true);
+  h+='<h3>Timestamps (UTC)</h3>';
+  h+=kv("Entry created (DestList)", rec.created, true);
+  h+=kv("Entry last modified", rec.modified, true);
+  h+=kv("Target created", rec.tgtCreated, true);
+  h+=kv("Target modified", rec.tgtModified, true);
+  h+=kv("Target accessed", rec.tgtAccessed, true);
+  h+=kv("Tracker created on", rec.trackerCreated, true);
+  h+='<h3>Target &amp; volume</h3>';
+  h+=kv("Local path", rec.target, true);
+  h+=kv("Common path", rec.commonPath, true);
+  h+=kv("Relative path", rec.relativePath, true);
+  h+=kv("File size", rec.fileSize, true);
+  h+=kv("Drive type", rec.driveType);
+  h+=kv("Volume serial", rec.volSerial, true);
+  h+=kv("Volume label", rec.volLabel);
+  h+=kv("MFT entry / seq", (rec.mftEntry||"")+((rec.mftEntry||rec.mftSeq)?(" / "+rec.mftSeq):""), true);
+  h+=kv("File attributes", rec.fileAttrs);
+  h+=kv("Header flags", rec.headerFlags);
+  h+='<h3>Origin (tracker)</h3>';
+  h+=kv("Machine ID", rec.machineId+(rec.foreign?"  (FOREIGN — differs from dataset host "+HOMEHOST+")":""), true);
+  h+=kv("Machine MAC", rec.machineMac, true);
+  h+=kv("Hostname (DestList)", rec.hostname, true);
+  h+=kv("Extra blocks", rec.extraBlocks);
+  h+=kv("Notes", rec.notes);
+  h+='<h3>Source</h3>';
+  h+=kv("Jump-list file", rec.src, true);
+  h+=kv("Source created / modified", rec.srcCreated+"  /  "+rec.srcModified, true);
+  $("detBody").innerHTML=h;
+  showEl("detailCard",true);
+}
+function closeDetail(){ DETREC=null; showEl("detailCard",false); $("detBody").innerHTML=""; }
+function copyDetail(){
+  if(!DETREC){ setStatus("No record open","err"); return; }
+  var r=DETREC, out=[];
+  out.push((r.type==="A"?"[Automatic] ":"[Custom] ")+(r.target||"(no target)"));
+  out.push("app: "+r.appLabel+"  ("+r.appId+")"+(r.user?("  user: "+r.user):""));
+  out.push("tags: "+(r.tags.length?r.tags.join(", "):"none")+"  score "+r.score);
+  for(var q=0;q<r.reasons.length;q++) out.push("  - "+r.reasons[q]);
+  if(trimStr(r.args)!=="") out.push("args: "+r.args);
+  out.push("activity "+r.primaryTs+" (UTC)  created "+r.created+"  target-modified "+r.tgtModified);
+  out.push("machineId "+r.machineId+"  drive "+r.driveType+(r.volSerial?("  vol "+r.volSerial):""));
+  out.push("source: "+r.src);
+  try{ window.clipboardData.setData("Text", out.join("\r\n")); setStatus("Record copied to clipboard","ok"); }
+  catch(e){ setStatus("Copy failed: "+e.message,"err"); }
+}
+
+/* ---------- generic grid (non-JLECmd CSVs) ---------- */
+function isNumStr(s){ s=trimStr(String(s)); return s!=="" && /^-?\d+(\.\d+)?$/.test(s); }
+function ingestGeneric(raw, head, srcLabel){
+  setMode("generic");
+  GHEAD=head; GROWS=[];
+  for(var i=1;i<raw.length;i++){ var rw=raw[i]; if(rw.length>=1 && !(rw.length===1 && rw[0]==="")) GROWS.push(rw); }
+  GSRC=srcLabel;
+  GSRCIDX=-1; for(var c=0;c<head.length;c++){ if(/^SourceFile(name)?$/i.test(trimStr(head[c]))){ GSRCIDX=c; break; } }
+  if(GSRCIDX>=0){ var sv=[]; for(var s=0;s<GROWS.length;s++) sv.push(GSRCIDX<GROWS[s].length?GROWS[s][GSRCIDX]:""); populateSourceFilter(distinctVals(sv)); }
+  else populateSourceFilter([]);
+  $("results").className="";
+  $("srcpill").innerHTML=nf(GROWS.length)+" rows &middot; "+esc(srcLabel)+" ("+GHEAD.length+" cols)";
+  QUERY=""; $("q").value=""; GSORTKEY=-1;
+  closeDetail();
+  setStatus("Loaded "+nf(GROWS.length)+" rows (generic table view)","ok");
+  renderGeneric();
+}
+function renderGeneric(){
+  if(!GHEAD) return;
+  var q=QUERY, rows=[];
+  for(var i=0;i<GROWS.length;i++){ var rw=GROWS[i];
+    if(SRCFILTER && GSRCIDX>=0 && (GSRCIDX<rw.length?rw[GSRCIDX]:"")!==SRCFILTER) continue;
+    if(q){ if(rw.join("  ").toLowerCase().indexOf(q)<0) continue; }
+    rows.push(rw);
+  }
+  if(GSORTKEY>=0){ var k=GSORTKEY, dir=GSORTDIR; rows=rows.slice(0);
+    rows.sort(function(a,b){ var x=(k<a.length?a[k]:""), y=(k<b.length?b[k]:"");
+      if(isNumStr(x)&&isNumStr(y)) return (parseFloat(x)-parseFloat(y))*dir;
+      x=String(x).toLowerCase(); y=String(y).toLowerCase(); return x<y?-dir:(x>y?dir:0); });
+  }
+  $("statbar").innerHTML=stat(nf(GROWS.length),"rows")+stat(nf(GHEAD.length),"columns")+stat(nf(rows.length),"matching")+
+    '<span class="stat" style="min-width:240px"><span class="n" style="font-size:12px">'+esc(GSRC)+'</span><span class="l">source</span></span>';
+  var shown=rows.length>MAXROWS?MAXROWS:rows.length;
+  var h="<thead><tr>";
+  for(var c=0;c<GHEAD.length;c++){ var ar=(GSORTKEY===c)?(GSORTDIR>0?" ▲":" ▼"):""; h+='<th data-k="'+c+'">'+esc(GHEAD[c])+ar+'</th>'; }
+  h+="</tr></thead><tbody>";
+  for(var r=0;r<shown;r++){ var row=rows[r]; h+="<tr>";
+    for(var c2=0;c2<GHEAD.length;c2++){ var v=(c2<row.length?row[c2]:""); h+='<td class="mono" title="'+esc(v)+'">'+esc(v)+'</td>'; }
+    h+="</tr>"; }
+  h+="</tbody>"; $("tbl").innerHTML=h;
+  $("count").innerHTML=nf(rows.length)+" rows"+(shown<rows.length?(" (showing "+nf(shown)+")"):"");
+  var ths=$("tbl").getElementsByTagName("th");
+  for(var i2=0;i2<ths.length;i2++){ ths[i2].onclick=function(e){
+    e=e||window.event; var t=e.target||e.srcElement;
+    if(t && /\bcgrip\b/.test(t.className+"")) return;
+    var kk=parseInt(this.getAttribute("data-k"),10);
+    if(GSORTKEY===kk) GSORTDIR*=-1; else { GSORTKEY=kk; GSORTDIR=1; } renderGeneric(); }; }
+  applyFreeze();
+  setupColResize();
+  window.__viewRows=rows;
+}
+function setMode(m){
+  MODE=m; var jl=(m==="jl");
+  showEl("jlCards",jl); showEl("jlCats",jl); showEl("jlDateCtl",jl); showEl("jlFoot",jl);
+  showEl("iocBtn",jl); showEl("viewToggle",jl);
+  if(!jl){ showEl("iocWrap",false); closeDetail(); }
+  if(jl) showEl("userWrap",false);
+  $("ovTitle").innerHTML = jl ? "Overview &mdash; reflects active filters" : "Overview";
+  $("tableTitle").innerHTML = jl ? ((VIEW==="time")?"Activity timeline":((VIEW==="apps")?"Applications":"Entries")) : "Records";
+}
+
+/* ---------- export / copy ---------- */
+function cq(v){ v=(v==null)?"":String(v); return /[",\r\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; }
+function nowStamp(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
+  return d.getFullYear()+""+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+function exportView(){
+  if(MODE==="generic"){ exportGeneric(); return; }
+  if(VIEW==="time"){ exportTimeline(); return; }
+  if(VIEW==="apps"){ exportApps(); return; }
+  var rows=window.__viewRows||[];
+  if(!rows.length){ setStatus("Nothing to export","err"); return; }
+  var head=["Type","User","AppId","AppDescription","Target","Arguments","Activity_UTC","Created_UTC","LastModified_UTC",
+    "InteractionCount","MRU","PinStatus","DriveType","VolumeSerial","VolumeLabel","MachineID","Hostname",
+    "TargetCreated_UTC","TargetModified_UTC","TargetAccessed_UTC","FileSize","WorkingDirectory","Tags","Score","Suspicious","SourceFile"];
+  var lines=[head.join(",")];
+  for(var i=0;i<rows.length;i++){ var r=rows[i];
+    lines.push([cq(r.type),cq(r.user),cq(r.appId),cq(r.appD),cq(r.target),cq(r.args),cq(r.primaryTs),cq(r.created),cq(r.modified),
+      cq(r.interactionCount),cq(r.mru),cq(r.pinStatus),cq(r.driveType),cq(r.volSerial),cq(r.volLabel),cq(r.machineId),cq(r.hostname),
+      cq(r.tgtCreated),cq(r.tgtModified),cq(r.tgtAccessed),cq(r.fileSize),cq(r.workingDir),
+      cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.src)].join(",")); }
+  writeExport(lines,"entries",rows.length,"rows");
+}
+function exportTimeline(){
+  var evs=window.__viewRows||[];
+  if(!evs.length){ setStatus("Nothing to export","err"); return; }
+  var head=["Time_UTC","Event","User","Type","AppDescription","AppId","Target","Arguments","Tags","Score","Suspicious","SourceFile"];
+  var lines=[head.join(",")];
+  for(var i=0;i<evs.length;i++){ var ev=evs[i], r=ev.rec;
+    lines.push([cq(ev.t),cq(ev.kind),cq(r.user),cq(r.type),cq(r.appD),cq(r.appId),cq(r.target),cq(r.args),
+      cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.src)].join(",")); }
+  writeExport(lines,"timeline",evs.length,"events");
+}
+function exportApps(){
+  var list=window.__viewRows||[];
+  if(!list.length){ setStatus("Nothing to export","err"); return; }
+  var head=["Application","AppId","EntriesTotal","AutomaticEntries","CustomEntries","DistinctTargets","Users","SuspiciousEntries","First_UTC","Last_UTC"];
+  var lines=[head.join(",")];
+  for(var i=0;i<list.length;i++){ var a=list[i];
+    lines.push([cq(a.appLabel),cq(a.appId),cq(a.count),cq(a.tA),cq(a.tC),cq(a.distinctTargets),cq(a.userCount),cq(a.sus),
+      cq(a.minMs?msToTs(a.minMs):""),cq(a.maxMs?msToTs(a.maxMs):"")].join(",")); }
+  writeExport(lines,"applications",list.length,"apps");
+}
+function exportGeneric(){
+  var rows=window.__viewRows||[];
+  if(!GHEAD||!rows.length){ setStatus("Nothing to export","err"); return; }
+  var lines=[]; var hd=[]; for(var c=0;c<GHEAD.length;c++) hd.push(cq(GHEAD[c])); lines.push(hd.join(","));
+  for(var i=0;i<rows.length;i++){ var rw=rows[i]; var cells=[]; for(var c2=0;c2<GHEAD.length;c2++) cells.push(cq(c2<rw.length?rw[c2]:"")); lines.push(cells.join(",")); }
+  writeExport(lines,"filtered",rows.length,"rows");
+}
+function writeExport(lines,tag,n,unit){
+  var dir=LASTOUTDIR||$("outDir").value;
+  var path=dir+"\\"+tag+"_export_"+nowStamp()+".csv";
+  try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(n)+" "+unit+" → "+path,"ok"); appendLog("Exported: "+path); }
+  catch(e){ setStatus("Export failed: "+e.message,"err"); }
+}
+function copyNotes(){
+  if(MODE==="generic"){
+    var grows=(window.__viewRows||[]).slice(0,500); if(!GHEAD||!grows.length){ setStatus("Nothing to copy","err"); return; }
+    var gout=[GHEAD.join("\t")];
+    for(var g=0;g<grows.length;g++) gout.push(grows[g].join("\t"));
+    try{ window.clipboardData.setData("Text", gout.join("\r\n")); setStatus("Copied "+grows.length+" rows (TSV)","ok"); }
+    catch(eg){ setStatus("Copy failed: "+eg.message,"err"); }
+    return;
+  }
+  var rows=(window.__viewRows||[]).slice(0,500);
+  if(!rows.length){ setStatus("Nothing to copy","err"); return; }
+  var out=[], j;
+  if(VIEW==="apps"){
+    out.push("Applications ("+rows.length+"):");
+    for(j=0;j<rows.length;j++){ var a=rows[j];
+      out.push(a.appLabel+" | entries "+a.count+" (A:"+a.tA+" C:"+a.tC+") | targets "+a.distinctTargets
+        +(a.sus?(" | "+a.sus+" suspicious"):"")+" | last "+(a.maxMs?msToTs(a.maxMs):"—")+" UTC"); }
+    try{ window.clipboardData.setData("Text", out.join("\r\n")); setStatus("Copied "+out.length+" lines","ok"); }
+    catch(ea){ setStatus("Copy failed: "+ea.message,"err"); }
+    return;
+  }
+  if(VIEW==="time"){
+    for(j=0;j<rows.length;j++){ var ev=rows[j], er=ev.rec;
+      out.push(ev.t+" | "+ev.kind+" | "+(er.user||"?")+" | "+er.appLabel+" | "+(er.target||"?")
+        +(er.tags.length?(" | "+er.tags.join(",")+" (score "+er.score+")"):"")); }
+    try{ window.clipboardData.setData("Text", out.join("\r\n")); setStatus("Copied "+out.length+" events to clipboard","ok"); }
+    catch(et){ setStatus("Copy failed: "+et.message,"err"); }
+    return;
+  }
+  for(var i=0;i<rows.length;i++){ var r=rows[i];
+    out.push(r.primaryTs+" | "+(r.user||"?")+" | "+(r.target||r.appLabel)+(trimStr(r.args)!==""?("  args: "+r.args):"")
+      +(r.tags.length?(" | "+r.tags.join(",")+" (score "+r.score+")"):"")
+      +(r.reasons.length?(" | "+r.reasons.join("; ")):"")); }
+  try{ window.clipboardData.setData("Text", out.join("\r\n"));
+    setStatus("Copied "+out.length+" rows to clipboard","ok"); }
+  catch(e){ setStatus("Copy failed: "+e.message,"err"); }
+}
+
+/* ---------- IOC list ---------- */
+function applyIocs(){
+  var t=$("iocBox").value, parts=String(t).split(/[\r\n,;]+/), out=[];
+  for(var i=0;i<parts.length;i++){ var s=trimStr(parts[i]).toLowerCase(); if(s) out.push(s); }
+  IOCS=out;
+  $("iocInfo").innerHTML=IOCS.length?(nf(IOCS.length)+" term(s) active"):"no terms";
+  if(MODE==="jl"&&ROWS.length){ rescoreAll(); buildApps(); render(); if(DETREC) renderDetail(DETREC); }
+  setStatus(IOCS.length?("IOC list applied — "+IOCS.length+" term(s), records rescored"):"IOC list cleared","ok");
+}
+
+/* ---------- wiring ---------- */
+function init(){
+  try{ window.resizeTo(1360,900); }catch(e){}
+  $("appver").innerHTML="&middot; v"+APP_VERSION;
+  try{ document.title="JLECmd Wrapper v"+APP_VERSION; }catch(e){}
+  loadSettings();
+  $("tblScroll").onscroll=applyFreeze;
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  var sh=new ActiveXObject("WScript.Shell");
+  try{ LIVE_RECENT=sh.ExpandEnvironmentStrings("%APPDATA%")+"\\Microsoft\\Windows\\Recent"; }
+  catch(e){ LIVE_RECENT="C:\\Users\\Public"; }
+  $("jlPath").value=LIVE_RECENT;
+  $("inMode").value="d";
+  var expBase=htaFolder()||fso.GetSpecialFolder(2)+"";
+  var expDir=expBase+"\\Exported CSVs";
+  try{ if(!fso.FolderExists(expDir)) fso.CreateFolder(expDir); }catch(e){}
+  $("outDir").value=expDir;
+
+  var zoom=0.9;
+  var zContent=$("content");
+  function applyZoom(){ zContent.style.zoom=zoom; var p=Math.round(zoom*100)+"%";
+    $("fup").title="Larger text ("+p+")"; $("fdown").title="Smaller text ("+p+")"; }
+  applyZoom();
+  $("fup").onclick=function(){ zoom=Math.min(zoom+0.15,2.5); applyZoom(); };
+  $("fdown").onclick=function(){ zoom=Math.max(zoom-0.15,0.6); applyZoom(); };
+
+  $("verBtn").onclick=checkVersion;
+  $("updBtn").onclick=downloadLatest;
+  $("openDirBtn").onclick=openDir;
+  $("procBtn").onclick=processJl;
+  $("liveBtn").onclick=function(){
+    $("inMode").value="d"; $("jlPath").value=LIVE_RECENT;
+    if(!canListFolder(LIVE_RECENT))
+      setStatus("Heads up: "+LIVE_RECENT+" is not readable. For the current user it should be — check the path; other profiles need an elevated run.","err");
+    else setStatus("Recent folder readable — click 'Process → analyze' to scan this user's jump lists.","ok");
+  };
+  $("loadSelBtn").onclick=function(){ var v=$("producedSel").value; if(!v) return;
+    setStatus("Loading "+v,"muted"); window.setTimeout(function(){ loadJlPaths([v], parentDir(v)); },50); };
+  $("loadBothBtn").onclick=function(){
+    var opts=$("producedSel").options, a="", c="";
+    for(var i=0;i<opts.length;i++){ if(/_AutomaticDestinations\.csv$/i.test(opts[i].value)&&!a) a=opts[i].value;
+      if(/_CustomDestinations\.csv$/i.test(opts[i].value)&&!c) c=opts[i].value; }
+    var paths=[]; if(a)paths.push(a); if(c)paths.push(c);
+    if(!paths.length){ setStatus("No Automatic/Custom CSVs in the list to merge.","err"); return; }
+    setStatus("Loading merged dataset…","muted"); window.setTimeout(function(){ loadJlPaths(paths, parentDir(paths[0])); },50); };
+  $("browseBtn").onclick=function(){
+    if($("inMode").value==="d"){
+      try{
+        var sha=new ActiveXObject("Shell.Application");
+        var fld=sha.BrowseForFolder(0,"Select the jump-list folder to process (a Recent folder or a collection's Users tree — the scan recurses).",0x51);
+        if(fld){ var p=""; try{ p=fld.Self.Path+""; }catch(e2){}
+          if(/^[a-z]:\\|^\\\\/i.test(p)) $("jlPath").value=p;
+          else if(p) setStatus("That selection has no filesystem path — pick a real folder.","err"); }
+      }catch(e){ $("jlPick").click(); }
+    } else { $("jlPick").click(); }
+  };
+  $("jlPick").onchange=function(){ if(this.value){ var v=this.value;
+    if($("inMode").value==="d"){ var i=v.lastIndexOf("\\"); if(i>0) v=v.substring(0,i); }
+    $("jlPath").value=v; } };
+  $("loadBtn").onclick=function(){ $("csvPick").click(); };
+  $("csvPick").onchange=function(){ if(this.value){ setStatus("Loading "+this.value,"muted"); loadCsvFile(this.value); } };
+  $("logToggle").onclick=function(){ var l=$("log");
+    if(l.style.display==="none"||!l.style.display){
+      if(!trimStr(l.innerHTML.replace(/<[^>]*>/g,""))){ l.innerHTML='<span class="muted">(empty — JLECmd output appears here after a run finishes. While a run is in progress a console window shows live progress.)</span>'; l.setAttribute("data-ph","1"); }
+      l.style.display="block"; this.innerHTML="Hide log";
+    } else { l.style.display="none"; this.innerHTML="Show log"; } };
+
+  var catBtns=$("jlCats").getElementsByTagName("button");
+  for(var i=0;i<catBtns.length;i++){ if(catBtns[i].getAttribute("data-cat")){ catBtns[i].onclick=function(){
+    CURCAT=this.getAttribute("data-cat"); highlightCat(); render();
+  }; } }
+
+  $("q").onkeyup=function(){ if(qTimer) window.clearTimeout(qTimer);
+    qTimer=window.setTimeout(function(){ QUERY=trimStr($("q").value).toLowerCase(); render(); },150); };
+  $("dfrom").onchange=function(){ DFROM=dayNum(this.value); render(); };
+  $("dto").onchange=function(){ DTO=dayNum(this.value); render(); };
+  $("userSel").onchange=function(){ if(MODE==="jl"){ USERFILTER=this.value; } else { SRCFILTER=this.value; } render(); };
+  $("clearBtn").onclick=function(){ $("q").value="";$("dfrom").value="";$("dto").value="";$("userSel").value="";
+    QUERY="";DFROM=0;DTO=0;USERFILTER="";SRCFILTER="";APPFILTER="";CURCAT="all"; highlightCat(); render(); setStatus("Filters cleared","muted"); };
+  $("exportBtn").onclick=exportView;
+  $("copyBtn").onclick=copyNotes;
+
+  $("vEntries").onclick=function(){ setView("entries"); };
+  $("vTime").onclick=function(){ setView("time"); };
+  $("vApps").onclick=function(){ setView("apps"); };
+  $("iocBtn").onclick=function(){ var w=$("iocWrap"); showEl("iocWrap", /\bhide\b/.test(w.className)); };
+  $("iocApply").onclick=applyIocs;
+  $("iocLoad").onclick=function(){ $("iocPick").click(); };
+  $("iocPick").onchange=function(){ if(this.value){
+    try{ $("iocBox").value=readUtf8(this.value); applyIocs(); }
+    catch(e){ setStatus("Could not read IOC file: "+e.message,"err"); } } };
+  $("detClose").onclick=closeDetail;
+  $("detCopy").onclick=copyDetail;
+
+  /* click delegation: data-app → filter to app + entries view; data-q → search; jl/time row → detail pane */
+  document.onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
+    if(t && /\bcgrip\b/.test((t.className||"")+"")) return;   // column-resize grips never act as row/link clicks
+    var ap=t&&t.getAttribute?t.getAttribute("data-app"):null;
+    if(ap!=null && ap!==""){ APPFILTER=ap; if(VIEW==="apps") setView("entries",true); highlightCat(); render();
+      var lbl=ap; for(var z=0;z<ROWS.length;z++){ if(ROWS[z].appId===ap){ lbl=ROWS[z].appLabel; break; } }
+      setStatus("Filtered to application: "+lbl+" (use clear to reset)","muted"); return; }
+    var q=t&&t.getAttribute?t.getAttribute("data-q"):null;
+    if(q){ $("q").value=q; QUERY=q.toLowerCase(); render(); return; }
+    if(MODE!=="jl"||VIEW==="apps") return;
+    var n=t;
+    while(n && n.tagName!=="TR"){ n=n.parentNode; if(n&&n.tagName==="TABLE") { n=null; break; } }
+    if(n && n.getAttribute && n.getAttribute("data-i")!=null && n.getAttribute("data-i")!==""){
+      var ix=parseInt(n.getAttribute("data-i"),10);
+      var rows=window.__viewRows||[];
+      if(ix>=0&&ix<rows.length){
+        var rr=rows[ix].rec||rows[ix];
+        renderDetail(rr);
+        var trs=$("tbl").getElementsByTagName("tr");
+        for(var z2=0;z2<trs.length;z2++){ if(trs[z2].getAttribute("data-i")!=null){
+          var zi=parseInt(trs[z2].getAttribute("data-i"),10);
+          var zr=rows[zi]?(rows[zi].rec||rows[zi]):null;
+          trs[z2].className = (zi===ix) ? (((zr&&zr.sus)?"sus ":"")+"sel") : ((zr&&zr.sus)?"sus":""); } }
+      }
+    }
+  };
+
+  var __cli=parseCli(); var __had=false; try{ __had=applyCli(__cli); }catch(eC){ appendLog("CLI parse error: "+eC.message); }
+  evaluateTooling(!__had);
+  if(isNetworkPath(htaFolder()))
+    appendLog("Heads-up: this app is running from a network location ("+htaFolder()+"). Windows zone policy may block the UTF-8 file reader there; the app falls back to ANSI IO automatically, but for full fidelity copy the folder to a local path (e.g. C:\\Tools\\JLECmd).");
+}
+function isNetworkPath(p){
+  try{ if(/^\\\\/.test(p)) return true;
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    return fso.GetDrive(fso.GetDriveName(p)).DriveType===3;
+  }catch(e){ return false; }
+}
+function dayNum(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{1,2})-(\d{1,2})/); if(!m) return 0;
+  function p(x){ x=String(x); return x.length<2?("0"+x):x; }
+  return Number(m[1]+p(m[2])+p(m[3])); }
+
+/* ---------- help / about overlay ---------- */
+var GITHUB="https://github.com/bpmorris22/JLECmd-Wrapper";
+function openUrl(u){ try{ new ActiveXObject("WScript.Shell").Run('"'+u+'"',1,false); }catch(e){ setStatus("Could not open browser: "+e.message,"err"); } }
+function openHelp(){ try{ $("helpVer").innerHTML="v"+APP_VERSION; }catch(e){} showEl("helpModal",true); }
+function closeHelp(){ showEl("helpModal",false); }
+
+/* ---------- command-line invocation: "<inputOrCsv>" ["<outDir>"] [/auto] ----------
+   HTA:APPLICATION.commandLine is UNDEFINED in IE=edge document mode → recover it from WMI. */
+function getCommandLine(){
+  try{ var cl=jlecmdHta.commandLine+""; if(cl && cl!=="undefined") return cl; }catch(e){}
+  try{
+    var lp=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\");
+    var fn=lp.substring(lp.lastIndexOf("\\")+1).toLowerCase(); if(!fn) return "";
+    var loc=new ActiveXObject("WbemScripting.SWbemLocator"), svc=loc.ConnectServer(".","root\\cimv2");
+    var q=svc.ExecQuery("SELECT CommandLine,CreationDate FROM Win32_Process WHERE Name='mshta.exe'");
+    var best="", bestDate="", en=new Enumerator(q);
+    for(; !en.atEnd(); en.moveNext()){ var pr=en.item(); var pcl=(pr.CommandLine==null?"":pr.CommandLine+"");
+      if(pcl.toLowerCase().indexOf(fn)<0) continue; var cd=(pr.CreationDate==null?"":pr.CreationDate+"");
+      if(!best || cd>bestDate){ best=pcl; bestDate=cd; } }
+    return best;
+  }catch(e2){}
+  return "";
+}
+function tokenizeCmdTail(){ var cl=getCommandLine(); if(!cl) return [];
+  var m=cl.match(/\.hta"?/i); var tail=m?cl.substring(m.index+m[0].length):cl;
+  var toks=[],i=0,n=tail.length,cur="",inq=false;
+  while(i<n){ var c=tail.charAt(i);
+    if(inq){ if(c==='"'){inq=false;} else cur+=c; i++; continue; }
+    if(c==='"'){ inq=true; i++; continue; }
+    if(c===' '||c==='\t'){ if(cur!==""){toks.push(cur);cur="";} i++; continue; }
+    cur+=c; i++; }
+  if(cur!=="") toks.push(cur); return toks; }
+function parseCli(){ var toks=tokenizeCmdTail(), cli={input:"",outDir:"",auto:false};
+  for(var i=0;i<toks.length;i++){ var t=toks[i];
+    if(/^[\/\-]{1,2}auto$/i.test(t)){ cli.auto=true; continue; }
+    if(/^[\/\-]/.test(t)) continue;
+    if(!cli.input) cli.input=t; else if(!cli.outDir) cli.outDir=t; }
+  return cli; }
+function applyCli(cli){ if(!cli.input) return false;
+  var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(/\.csv$/i.test(cli.input) && fso.FileExists(cli.input)){ appendLog("CLI: loading CSV "+cli.input); window.setTimeout(function(){ loadCsvFile(cli.input); },60); return true; }
+  if(fso.FolderExists(cli.input)){ $("inMode").value="d"; $("jlPath").value=cli.input; }
+  else if(fso.FileExists(cli.input)){ $("inMode").value="f"; $("jlPath").value=cli.input; }
+  else { setStatus("CLI input not found: "+cli.input,"err"); appendLog("CLI input not found: "+cli.input); return false; }
+  if(cli.outDir) $("outDir").value=cli.outDir;
+  if(cli.auto){ appendLog("CLI: /auto — processing "+cli.input); window.setTimeout(function(){ processJl(); },200); }
+  else setStatus("CLI: input prefilled — click 'Process → analyze' to run.","muted");
+  return true; }
+
+/* ---------- self-update: GitHub Releases check; one-click download of a newer .hta ---------- */
+var SELF_REPO="bpmorris22/JLECmd-Wrapper", SELF_HTA="JLECmd-Wrapper.hta", SELF_LATEST="", SELF_ASSET_URL="";
+function selfVerNewer(r,l){ var a=String(r).split("."),b=String(l).split("."),n=Math.max(a.length,b.length);
+  for(var i=0;i<n;i++){ var x=parseInt(a[i],10)||0,y=parseInt(b[i],10)||0; if(x!==y) return x>y; } return false; }
+function selfPath(){ try{ var p=decodeURIComponent(location.pathname+"").replace(/^\//,"").replace(/\//g,"\\");
+  if(/\.hta$/i.test(p) && fileExists(p)) return p; }catch(e){} return (htaFolder()||"")+"\\"+SELF_HTA; }
+function checkSelfUpdate(){
+  try{
+    var x=new ActiveXObject("MSXML2.XMLHTTP.6.0");
+    x.open("GET","https://api.github.com/repos/"+SELF_REPO+"/releases/latest",true);
+    try{ x.setRequestHeader("User-Agent",SELF_HTA); }catch(eh){}
+    x.onreadystatechange=function(){ if(x.readyState!==4) return;
+      try{ if(x.status!==200) return; var t=x.responseText+"";
+        var m=t.match(/"tag_name"\s*:\s*"v?([0-9.]+)"/i); if(!m) return;
+        var latest=m[1]; if(!selfVerNewer(latest,APP_VERSION)) return;
+        var url="", re=/"browser_download_url"\s*:\s*"([^"]+\.hta)"/ig, mm;
+        while((mm=re.exec(t))){ if(mm[1].toLowerCase().indexOf(SELF_HTA.toLowerCase())>=0){ url=mm[1]; break; } if(!url) url=mm[1]; }
+        if(!url) url="https://github.com/"+SELF_REPO+"/releases/download/v"+latest+"/"+SELF_HTA;
+        SELF_LATEST=latest; SELF_ASSET_URL=url;
+        var b=$("selfUpd"); if(b){ b.innerHTML="Update to v"+latest; b.className="btn primary";
+          b.title="A newer "+SELF_HTA+" (v"+latest+") is on GitHub — click to download & replace this file"; }
+      }catch(e){} };
+    x.send();
+  }catch(e){}
+}
+function doSelfUpdate(){
+  if(!SELF_ASSET_URL){ setStatus("No update available (or offline).","muted"); return; }
+  var target=selfPath();
+  if(!target || !/\.hta$/i.test(target)){ setStatus("Can't locate this app's own file to update in place.","err"); return; }
+  if(!confirm("Download "+SELF_HTA+" v"+SELF_LATEST+" and replace this file?\n\n"+target+"\n\nAfter it downloads, close and reopen the app to run the new version.")) return;
+  setStatus("Downloading v"+SELF_LATEST+"…","muted");
+  var fso=new ActiveXObject("Scripting.FileSystemObject"), tmp=fso.GetSpecialFolder(2)+"";
+  var ps1=tmp+"\\selfupd_"+new Date().getTime()+Math.floor(Math.random()*100000)+".ps1";
+  var tq=String(target).replace(/'/g,"''"), uq=String(SELF_ASSET_URL).replace(/'/g,"''");
+  var L=["$ErrorActionPreference='Stop'","[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12",
+    "$u='"+uq+"'","$t='"+tq+"'","$tmp=Join-Path $env:TEMP ('selfupd_'+[guid]::NewGuid().ToString('N')+'.hta')",
+    "Invoke-WebRequest -Uri $u -OutFile $tmp -Headers @{ 'User-Agent'='"+SELF_HTA+"' }",
+    "if((Get-Item $tmp).Length -lt 2000){ throw 'downloaded file too small' }",
+    "Copy-Item $tmp $t -Force","Remove-Item $tmp -Force -ErrorAction SilentlyContinue","Write-Output 'SELFUPD_OK'"];
+  try{ var f=fso.CreateTextFile(ps1,true); f.Write(L.join("\r\n")); f.Close(); }catch(ew){ setStatus("Self-update stage failed: "+ew.message,"err"); return; }
+  try{ var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -File "'+ps1+'" > "__LOG__" 2>&1']);
+    try{ fso.DeleteFile(ps1); }catch(e0){}
+    if((r.log+"").indexOf("SELFUPD_OK")>=0){ var b=$("selfUpd"); if(b) b.className="btn primary hide";
+      setStatus("Updated to v"+SELF_LATEST+" — CLOSE and reopen the app to run the new version.","ok");
+      try{ alert("Update installed (v"+SELF_LATEST+").\n\nClose and reopen "+SELF_HTA+" to run the new version."); }catch(e){}
+    } else { appendLog("--- self-update ---\n"+r.log); setStatus("Self-update failed — see log; download manually from GitHub if needed.","err"); }
+  }catch(e){ setStatus("Self-update failed: "+e.message,"err"); }
+}
+window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }catch(e){} };
+</script>
+<div id="helpModal" class="modal hide" onclick="if((event.srcElement||{}).id==='helpModal')closeHelp()">
+  <div class="mcard">
+    <span class="x" onclick="closeHelp()" title="Close">&times;</span>
+    <h2>JLECmd Wrapper <span class="muted" style="font-size:13px;font-weight:400" id="helpVer"></span></h2>
+    <div class="gh muted">GitHub: <span class="lnk" onclick="openUrl(GITHUB)">https://github.com/bpmorris22/JLECmd-Wrapper</span></div>
+    <p>A single-file GUI for triaging <b>Windows Jump Lists</b> with Eric Zimmerman's JLECmd — runs JLECmd for you and turns both output CSVs into one interactive, suspicion-scored activity view. Jump lists record what the interactive user opened, when, and from where, per user profile.</p>
+    <h3>Quick start</h3>
+    <ul>
+      <li>Put this <code>.hta</code> next to <code>JLECmd.exe</code>, or use <b>Update / download JLECmd</b> to fetch it.</li>
+      <li>Point the input at <code>%APPDATA%\Microsoft\Windows\Recent</code> (this user, no elevation needed), a collected <code>Users</code> tree (KAPE/Velociraptor), or a single jump-list file — then <b>Process → analyze</b>.</li>
+      <li>Or <b>Load existing CSV…</b> to view JLECmd CSVs you already have (it offers to pair the Automatic/Custom sibling).</li>
+    </ul>
+    <h3>Command line</h3>
+    <p><code>mshta "JLECmd-Wrapper.hta" "&lt;inputOrCsv&gt;" ["&lt;outDir&gt;"] [/auto]</code></p>
+    <ul>
+      <li><code>&lt;input&gt;</code> — a <code>.csv</code> (auto-loads into the viewer) or a jump-list file / directory (prefilled; processed with <code>/auto</code>).</li>
+      <li><code>&lt;outDir&gt;</code> — CSV output directory (optional). &nbsp; <code>/auto</code> — process immediately.</li>
+    </ul>
+    <h3>Notes</h3>
+    <ul>
+      <li>Three views: <b>Entries</b> (one row per destination), <b>Timeline</b> (activity events), and <b>Applications</b> (per-AppId rollup). Suspicion scoring, IOC/keyword list, and a full detail pane are built in.</li>
+      <li>Columns are resizable &mdash; drag a header's right edge; double-click the edge to reset. Widths are remembered per view in <code>JLECmd-Wrapper.settings.json</code> next to the app.</li>
+      <li>All timestamps are UTC. Both output CSVs (AutomaticDestinations + CustomDestinations) load together as one dataset. "Empty custom destinations jump list" skips are routine, not errors.</li>
+    </ul>
+    <p class="muted" style="font-size:11px">MIT © 2026 Ben Morris — click the link above for the full README &amp; releases.</p>
+  </div>
+</div>
+
+</body>
+</html>
