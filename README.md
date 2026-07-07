@@ -94,7 +94,7 @@ and the filtered view exports to CSV or copies as case notes.
 ## Command line
 
 ```
-mshta "JLECmd-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto] [/view:entries|time|apps]
+mshta "JLECmd-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto] [/view:entries|time|apps] [/from:yyyy-MM-dd] [/to:yyyy-MM-dd]
 ```
 
 - `<input>` — a `.csv` (auto-loads into the viewer, pairing the Automatic/Custom sibling automatically)
@@ -104,6 +104,7 @@ mshta "JLECmd-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto] [/view:entries|ti
 - **Shared IOC list** — an `IOC.txt` next to the app (one term per line, `#` comments) is auto-merged into the IOC box at launch; one list covers the whole toolkit and terms you paste locally are kept.
 - **Run provenance + triage summary** — every successful run appends a `runinfo.json` entry (app, host, input path, files) in the output folder, including a triage summary (entries, flagged count, max score, top hits); the DFIR-Artifact-Finder shows these per host in its inventory, even for standalone runs.
 - `/view:` — open directly on a specific view.
+- `/from:yyyy-MM-dd` `/to:yyyy-MM-dd` — case window (UTC, inclusive): prefills the date filter and is recorded in `runinfo.json`; never affects scoring. The [DFIR-Artifact-Finder](https://github.com/bpmorris22/DFIR-Artifact-Finder) passes these on every launch.
 
 ## Notes
 
