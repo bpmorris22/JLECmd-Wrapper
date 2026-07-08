@@ -157,7 +157,7 @@
     <button class="btn" id="browseBtn">Browse&hellip;</button>
     <button class="btn" id="liveBtn" title="Point at this user's live %APPDATA%\Microsoft\Windows\Recent (both AutomaticDestinations and CustomDestinations are picked up in one recursive pass). Readable without elevation for the current user; other profiles need an elevated run.">Scan this user's Recent</button>
     <label class="fld" title="Required before processing. Guessed from the input path (Collection-<host>-… segments, or this machine for live paths) — overwrite it if the guess is wrong.">Target hostname (required) &mdash; names the output folder _Processed\&lt;host&gt;\JLECmd next to this app</label>
-    <input class="txt" id="hostName" value="" style="width:260px" placeholder="e.g. LT-2738RQ3">
+    <input class="txt" id="hostName" value="" style="width:260px" placeholder="e.g. WORKSTATION-01">
     <label class="fld">CSV output directory</label>
     <input class="txt wide" id="outDir" value="">
     <button class="btn" id="openDirBtn">Open folder</button>
@@ -251,7 +251,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.6.0";
+var APP_VERSION = "0.6.1";
 var PENDING_VIEW = "";               // CLI /view: deep-link, honored once after the first dataset loads
 var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
 var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
@@ -293,7 +293,7 @@ var STAGING = ["\\appdata\\","\\temp\\","\\programdata\\","\\perflogs\\","\\wind
 /* FP guard (tuned 2026-07-06 on this box): legitimate per-user install/shortcut roots that live under
    \AppData\ but are NOT attacker staging. Excluding these from J1 kills the chronic per-user-app noise
    (VS Code, Store apps, Teams, Start-Menu shortcuts) WITHOUT touching \AppData\Roaming\<vendor>\ or
-   \AppData\Local\Temp\ — where the campaign's Node.js/Java RATs actually staged (documet.docx, node-v22). */
+   \AppData\Local\Temp\ — common attacker staging locations for dropped loaders and portable runtimes. */
 var NOTSTAGING = ["\\appdata\\local\\programs\\","\\appdata\\local\\microsoft\\windowsapps\\",
   "\\appdata\\local\\microsoft\\teams\\","\\appdata\\roaming\\microsoft\\windows\\start menu\\",
   "\\appdata\\local\\programs\\microsoft vs code\\"];
