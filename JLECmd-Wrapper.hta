@@ -46,7 +46,7 @@
 <style>
   html{margin:0;height:100%;background:#0d1117}
   body{margin:0;height:100%;background:#0d1117;color:#e6edf3;font-family:Segoe UI,Tahoma,sans-serif;font-size:16px}
-  #content{zoom:0.9;box-sizing:border-box}
+  #content{zoom:0.9;width:111.111%;box-sizing:border-box}   /* zoom<1 shrinks a 100%-wide block below viewport width — widen by 1/zoom in CSS so it fills the window from the first paint (applyZoom keeps it in sync for A-/A+) */
   a{color:#58a6ff}
   .mono{font-family:Consolas,"Courier New",monospace}
   .muted{color:#8b949e}
@@ -255,7 +255,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.7.1";
+var APP_VERSION = "0.7.3";
 var PENDING_VIEW = "";               // CLI /view: deep-link, honored once after the first dataset loads
 var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
 var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
@@ -309,8 +309,6 @@ var ARGS_HOT = ["http","-enc","-e ","powershell","iex","mshta","rundll32","regsv
 function $(id){ return document.getElementById(id); }
 function esc(s){ if(s==null) return ""; s=String(s);
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-function endsWith(s,suf){ if(!s) return false; s=String(s); return s.length>=suf.length && s.substring(s.length-suf.length)===suf; }
-function contains(s,sub){ return String(s).indexOf(sub)>=0; }
 function nf(n){ n=String(n); var dot=n.indexOf("."); var dec=""; if(dot>=0){ dec=n.substring(dot); n=n.substring(0,dot); }
   var r="",c=0; for(var k=n.length-1;k>=0;k--){ r=n.charAt(k)+r; c++; if(c%3===0&&k>0) r=","+r; } return r+dec; }
 function setStatus(msg,cls){ var el=$("status"); el.innerHTML=esc(msg); el.className=cls||"muted"; }
@@ -484,17 +482,24 @@ function verCmp(a,b){ a=verTuple(a); b=verTuple(b); var n=Math.max(a.length,b.le
   for(var i=0;i<n;i++){ var x=a[i]||0,y=b[i]||0; if(x!==y) return x<y?-1:1; } return 0; }
 function schemesComparable(a,b){ var am=parseInt(String(a).split(".")[0],10)||0, bm=parseInt(String(b).split(".")[0],10)||0;
   return (am>=2000)===(bm>=2000); }   /* CalVer(site) vs SemVer(exe banner) are not comparable — avoids a perpetual bogus update nag */
-function fetchLatest(){
+/* async since 0.7.3 — the old synchronous send() froze the whole UI for the 2–4 s timeout window
+   on a slow/blackholed network at every launch. WEB_OK/LATEST_VER are set before done() runs. */
+function fetchLatest(done){
   LATEST_VER=KNOWN_LATEST_JLECMD; WEB_OK=false;
   try{
     var x=new ActiveXObject("MSXML2.ServerXMLHTTP.6.0");
     x.setTimeouts(2000,3000,4000,4000);
-    x.open("GET", JLECMD_PAGE, false); x.send();
-    if(x.status===200){ WEB_OK=true; var t=x.responseText+"";
-      var m=t.match(/JLECmd[\s\S]{0,800}?(\d{4}\.\d+\.\d+)/i) || t.match(/JLECmd[\s\S]{0,800}?(\d+\.\d+\.\d+)/i);
-      if(m) LATEST_VER=m[1]; }
-  }catch(e){ WEB_OK=false; }
-  return LATEST_VER;
+    x.open("GET", JLECMD_PAGE, true);
+    x.onreadystatechange=function(){ if(x.readyState!==4) return;
+      try{
+        if(x.status===200){ WEB_OK=true; var t=x.responseText+"";
+          var m=t.match(/JLECmd[\s\S]{0,800}?(\d{4}\.\d+\.\d+)/i) || t.match(/JLECmd[\s\S]{0,800}?(\d+\.\d+\.\d+)/i);
+          if(m) LATEST_VER=m[1]; }
+      }catch(e){ WEB_OK=false; }
+      if(done) done();
+    };
+    x.send();
+  }catch(e2){ WEB_OK=false; if(done) done(); }
 }
 /* exe pill: green=present/current, orange=comparable newer exists, grey=not found (downloaded on demand) */
 function updateVerPill(){
@@ -517,24 +522,27 @@ function evaluateTooling(promptIfNeeded){
   if(EXE) $("exeline").innerHTML="Tool: "+esc(EXE)+"  &middot;  run with DOTNET_ROLL_FORWARD=Major (covers .NET 9-target builds)";
   else $("exeline").innerHTML='<span class="err">JLECmd.exe not found next to this app ('+esc(dir||"app folder")+') or in C:\\ZimmermanTools</span>';
   if(found) checkVersion(); else { LOCAL_VER=""; }
-  fetchLatest(); updateVerPill();
+  updateVerPill();   // provisional pill (local info only) — refreshed when the async web check returns below
   if(found){ var miss=checkDeps(); if(miss.length) setStatus("JLECmd support files missing next to the exe: "+miss.join(", "),"err"); }
-  if(!promptIfNeeded) return;
-  if(localComplete){
-    if(WEB_OK && LOCAL_VER && schemesComparable(LOCAL_VER,LATEST_VER) && verCmp(LOCAL_VER,LATEST_VER)<0){
-      if(confirm("A newer JLECmd is available.\n\nNext to this app: v"+LOCAL_VER+"\nLatest online:   v"+LATEST_VER+"\n\nDownload the update next to the app now?")) downloadLatest();
-    }
-  } else {
-    if(WEB_OK){
-      var msg = (found ? ("JLECmd is not set up next to this app (currently using "+EXE+").\n\n") : "JLECmd.exe was not found.\n\n")
-        + "Download the latest (v"+LATEST_VER+") to a self-contained copy next to the app at:\n"+(dir||"?")+"\n\nProceed?";
-      if(confirm(msg)) downloadLatest();
-    } else if(found){
-      setStatus("Using local JLECmd ("+EXE+") — no internet to reach Zimmerman Tools, so can't verify/download the latest.","muted");
+  fetchLatest(function(){
+    updateVerPill();
+    if(!promptIfNeeded) return;
+    if(localComplete){
+      if(WEB_OK && LOCAL_VER && schemesComparable(LOCAL_VER,LATEST_VER) && verCmp(LOCAL_VER,LATEST_VER)<0){
+        if(confirm("A newer JLECmd is available.\n\nNext to this app: v"+LOCAL_VER+"\nLatest online:   v"+LATEST_VER+"\n\nDownload the update next to the app now?")) downloadLatest();
+      }
     } else {
-      setStatus("JLECmd.exe not found next to this .hta and no internet to download it. Place JLECmd.exe (net6/net9 build) next to this .hta.","err");
+      if(WEB_OK){
+        var msg = (found ? ("JLECmd is not set up next to this app (currently using "+EXE+").\n\n") : "JLECmd.exe was not found.\n\n")
+          + "Download the latest (v"+LATEST_VER+") to a self-contained copy next to the app at:\n"+(dir||"?")+"\n\nProceed?";
+        if(confirm(msg)) downloadLatest();
+      } else if(found){
+        setStatus("Using local JLECmd ("+EXE+") — no internet to reach Zimmerman Tools, so can't verify/download the latest.","muted");
+      } else {
+        setStatus("JLECmd.exe not found next to this .hta and no internet to download it. Place JLECmd.exe (net6/net9 build) next to this .hta.","err");
+      }
     }
-  }
+  });
 }
 function downloadLatest(){
   var target=htaFolder()||EXE_DIR;
@@ -684,7 +692,7 @@ function buildRunSummary(){
      top-3 "name (score)". "Flagged" uses this app's own suspicion threshold (rec.sus, score>=2).
      Name = target basename, falling back to the application label (same as the overview's suspicious list). */
   try{
-    if(!ROWS.length) return null;
+    if(MODE!=="jl" || !ROWS.length) return null;   // a generic-CSV load leaves ROWS holding the PREVIOUS dataset — never summarize stale rows into this run's runinfo
     var flagged=0, maxScore=0, top=[], i;
     for(i=0;i<ROWS.length;i++){ var r=ROWS[i];
       if(r.score>maxScore) maxScore=r.score;
@@ -764,7 +772,7 @@ function processJlDone(log,outdir,before){
     // single-file run may produce a differently-named CSV; just load the biggest fresh one
     var big=fresh[0]; for(var k=1;k<fresh.length;k++){ if(fresh[k].size>big.size) big=fresh[k]; }
     setStatus("Produced "+fresh.length+" CSV(s); loaded "+big.name+"."+failNote,"ok");
-    loadCsvFile(big.path);
+    loadCsvFile(big.path, true);   // autoPair — a sibling-pairing confirm() here would hang a CLI /auto run
     patchRunInfoSummary(buildRunSummary());   // rows are scored now — add the triage headline to the runinfo entry
     return;
   }
@@ -816,10 +824,16 @@ function parseCSV(text){
   if(text.charCodeAt(0)===0xFEFF) text=text.substring(1);
   var lines=text.split("\n"), rows=[], i=0, n=lines.length;
   while(i<n){
+    /* strip each physical line's trailing \r BEFORE rejoining multi-line quoted fields, so
+       embedded CRLF inside a quoted field normalizes to \n instead of leaving a stray \r mid-field */
     var line=lines[i]; i++;
-    var qc=countQuotes(line);
-    while((qc%2)===1 && i<n){ line+="\n"+lines[i]; qc+=countQuotes(lines[i]); i++; }
     if(line.charAt(line.length-1)==='\r') line=line.substring(0,line.length-1);
+    var qc=countQuotes(line);
+    while((qc%2)===1 && i<n){
+      var nx=lines[i]; i++;
+      if(nx.charAt(nx.length-1)==='\r') nx=nx.substring(0,nx.length-1);
+      line+="\n"+nx; qc+=countQuotes(nx);
+    }
     if(line==="") continue;
     rows.push(parseCSVLine(line));
   }
@@ -985,7 +999,7 @@ function scoreRec(rec){
     if(hot.length){ score+=2; tags.push("ARGS-HOT"); reasons.push("Suspicious argument token(s): "+hot.join(", ")); } }
   // J6 remote / removable / UNC / admin share
   var rem=/removable/i.test(rec.driveType) || isUnc(tL) || isUnc(rec.commonL);
-  if(rem){ score+=1; tags.push("REMOTE"); reasons.push("Removable-media or UNC target ("+esc(rec.driveType||"")+")");
+  if(rem){ score+=1; tags.push("REMOTE"); reasons.push("Removable-media or UNC target ("+(rec.driveType||"")+")");   // raw text — reasons are esc()'d at display time (tooltips/detail) and must stay plain for the clipboard paths
     if(isAdminShare(tL)||isAdminShare(rec.commonL)){ score+=1; reasons.push("Administrative share (\\\\host\\C$)"); } }
   // J7 archive / container
   if(ARCHIVE_EXT[rec.targetExt]){ score+=1; tags.push("ARCHIVE"); reasons.push("Archive/container target (."+rec.targetExt+")"); }
@@ -1012,7 +1026,7 @@ function buildApps(){
     if(r.sus) a.sus++;
     if(r.msPrim){ if(!a.minMs||r.msPrim<a.minMs) a.minMs=r.msPrim; if(r.msPrim>a.maxMs) a.maxMs=r.msPrim; }
   }
-  APPS=[]; for(k in map){ if(map[k].hasOwnProperty){ var a2=map[k];
+  APPS=[]; for(k in map){ if(map.hasOwnProperty(k)){ var a2=map[k];
     var dt=0,u=0,x; for(x in a2.targets){ if(a2.targets.hasOwnProperty(x)) dt++; }
     for(x in a2.users){ if(a2.users.hasOwnProperty(x)) u++; }
     a2.distinctTargets=dt; a2.userCount=u; APPS.push(a2); } }
@@ -1110,7 +1124,7 @@ function typeTag(r){ return r.type==="A" ? '<span class="tag ta">A</span>' : '<s
 var COLS=[
   {h:"Tags", sk:function(r){return -r.score;}, cell:function(r){return '<td class="first">'+tagHtml(r)+'</td>';}},
   {h:"T", sk:function(r){return r.type;}, cell:function(r){return '<td title="'+(r.type==="A"?"AutomaticDestinations":"CustomDestinations")+'">'+typeTag(r)+'</td>';}},
-  {h:"User", sk:function(r){return r.user.toLowerCase();}, cell:function(r){return '<td class="mono" title="'+esc(r.user)+'">'+esc(r.user||"—")+'</td>';}},
+  {h:"User", sk:function(r){return r.user.toLowerCase();}, cell:function(r){return r.user?('<td class="mono lnk" data-user="'+esc(r.user)+'" title="Click to filter to '+esc(r.user)+'">'+esc(r.user)+'</td>'):'<td class="mono">&mdash;</td>';}},
   {h:"Application", sk:function(r){return r.appLabel.toLowerCase();}, cell:function(r){return '<td class="lnk" data-app="'+esc(r.appId)+'" title="'+esc(r.appLabel)+' ('+esc(r.appId)+')">'+esc(r.appLabel)+'</td>';}},
   {h:"Target", sk:function(r){return r.targetL;}, cell:function(r){return '<td class="mono lnk" data-q="'+esc(baseName(r.target))+'" title="'+esc(r.target)+'">'+esc(r.target||"—")+'</td>';}},
   {h:"Arguments", sk:function(r){return r.argsL;}, cell:function(r){return '<td class="mono" title="'+esc(r.args)+'">'+esc(r.args)+'</td>';}},
@@ -1309,7 +1323,7 @@ var TCOLS=[
   {h:"Tags", sk:function(ev){return -ev.rec.score;}, cell:function(ev){return '<td class="first">'+tagHtml(ev.rec)+'</td>';}},
   {h:"Time (UTC)", sk:function(ev){return ev.ms;}, cell:function(ev){return '<td class="mono">'+esc(ev.t)+'</td>';}},
   {h:"Event", sk:function(ev){return ev.kind;}, cell:function(ev){return '<td class="muted">'+esc(ev.kind)+'</td>';}},
-  {h:"User", sk:function(ev){return ev.rec.user.toLowerCase();}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.user)+'">'+esc(ev.rec.user||"—")+'</td>';}},
+  {h:"User", sk:function(ev){return ev.rec.user.toLowerCase();}, cell:function(ev){return ev.rec.user?('<td class="mono lnk" data-user="'+esc(ev.rec.user)+'" title="Click to filter to '+esc(ev.rec.user)+'">'+esc(ev.rec.user)+'</td>'):'<td class="mono">&mdash;</td>';}},
   {h:"Application", sk:function(ev){return ev.rec.appLabel.toLowerCase();}, cell:function(ev){return '<td title="'+esc(ev.rec.appLabel)+'">'+esc(ev.rec.appLabel)+'</td>';}},
   {h:"Target", sk:function(ev){return ev.rec.targetL;}, cell:function(ev){return '<td class="mono lnk" data-q="'+esc(baseName(ev.rec.target))+'" title="'+esc(ev.rec.target)+'">'+esc(ev.rec.target||"—")+'</td>';}}
 ];
@@ -1549,7 +1563,12 @@ function setMode(m){
 }
 
 /* ---------- export / copy ---------- */
-function cq(v){ v=(v==null)?"":String(v); return /[",\r\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; }
+/* Excel formula-injection guard: targets/args are attacker-influenced by definition, and exports get
+   opened in Excel during casework. A leading ' neutralizes =/+/@/- formulas; plain negative numbers
+   (MRU -1 etc.) are exempted so numeric columns stay numeric. */
+function cq(v){ v=(v==null)?"":String(v);
+  if(/^[=+@\-]/.test(v) && !/^-?\d+(\.\d+)?$/.test(v)) v="'"+v;
+  return /[",\r\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; }
 function nowStamp(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
   return d.getFullYear()+""+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
 function exportView(){
@@ -1666,8 +1685,11 @@ function init(){
   // default output follows the target hostname: _Processed\<host>\JLECmd next to the .hta
   // (the default input is this user's live Recent folder, so the first guess is this computer's name)
   hostGuessFrom(LIVE_RECENT);
-  $("hostName").onkeyup=function(){ HOST_TOUCHED=true; syncOutDir(); };
-  $("outDir").onkeyup=function(){ OUT_TOUCHED=true; };
+  /* keyup alone misses mouse paste / context-menu edits — the guess logic would then clobber an operator-set value */
+  var hostTouch=function(){ HOST_TOUCHED=true; window.setTimeout(syncOutDir,0); };   // deferred: onpaste fires before the field value updates
+  $("hostName").onkeyup=hostTouch; $("hostName").onchange=hostTouch; $("hostName").onpaste=hostTouch;
+  var outTouch=function(){ OUT_TOUCHED=true; };
+  $("outDir").onkeyup=outTouch; $("outDir").onchange=outTouch; $("outDir").onpaste=outTouch;
   loadToolkitIoc();   // shared toolkit IOC.txt — merged before any CLI /auto run
 
   var zoom=0.9;
@@ -1750,6 +1772,8 @@ function init(){
   /* click delegation: data-app → filter to app + entries view; data-q → search; jl/time row → detail pane */
   document.onclick=function(e){ e=e||window.event; var t=e.target||e.srcElement;
     if(t && /\bcgrip\b/.test((t.className||"")+"")) return;   // column-resize grips never act as row/link clicks
+    var du=t&&t.getAttribute?t.getAttribute("data-user"):null;
+    if(du!=null&&du!==""){ USERFILTER=du; try{ $("userSel").value=du; }catch(eu){} render(); return; }   // user-cell click = filter, not detail
     var ap=t&&t.getAttribute?t.getAttribute("data-app"):null;
     if(ap!=null && ap!==""){ APPFILTER=ap; if(VIEW==="apps") setView("entries",true); highlightCat(); render();
       var lbl=ap; for(var z=0;z<ROWS.length;z++){ if(ROWS[z].appId===ap){ lbl=ROWS[z].appLabel; break; } }
