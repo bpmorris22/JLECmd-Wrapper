@@ -259,7 +259,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.1";
+var APP_VERSION = "0.8.2";
 var PENDING_VIEW = "";               // CLI /view: deep-link, honored once after the first dataset loads
 var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
 var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
@@ -1229,7 +1229,7 @@ var COLS=[
   {h:"T", sk:function(r){return r.type;}, cell:function(r){return '<td title="'+(r.type==="A"?"AutomaticDestinations":"CustomDestinations")+'">'+typeTag(r)+'</td>';}},
   {h:"User", sk:function(r){return r.user.toLowerCase();}, cell:function(r){return r.user?('<td class="mono lnk" data-user="'+esc(r.user)+'" title="Click to filter to '+esc(r.user)+'">'+esc(r.user)+'</td>'):'<td class="mono">&mdash;</td>';}},
   {h:"Application", sk:function(r){return r.appLabel.toLowerCase();}, cell:function(r){return '<td class="lnk" data-app="'+esc(r.appId)+'" title="'+esc(r.appLabel)+' ('+esc(r.appId)+')">'+esc(r.appLabel)+'</td>';}},
-  {h:"Target", sk:function(r){return r.targetL;}, cell:function(r){return '<td class="mono lnk" data-q="'+esc(baseName(r.target))+'" title="'+esc(r.target)+'">'+esc(r.target||"—")+'</td>';}},
+  {h:"Target", sk:function(r){return r.targetL;}, cell:function(r){return '<td class="mono" title="'+esc(r.target)+'">'+esc(r.target||"—")+'</td>';}},   // plain cell: a click opens the detail pane, which carries the file-name search link
   {h:"Arguments", sk:function(r){return r.argsL;}, cell:function(r){return '<td class="mono" title="'+esc(r.args)+'">'+esc(r.args)+'</td>';}},
   {h:"Activity (UTC)", sk:function(r){return r.msPrim;}, cell:function(r){return '<td class="mono" title="automatic: LastModified; custom: file mtime">'+esc(r.primaryTs)+'</td>';}},
   {h:"Created (UTC)", sk:function(r){return msOf(r.created);}, cell:function(r){return '<td class="mono muted">'+esc(r.created)+'</td>';}},
@@ -1428,7 +1428,7 @@ var TCOLS=[
   {h:"Event", sk:function(ev){return ev.kind;}, cell:function(ev){return '<td class="muted">'+esc(ev.kind)+'</td>';}},
   {h:"User", sk:function(ev){return ev.rec.user.toLowerCase();}, cell:function(ev){return ev.rec.user?('<td class="mono lnk" data-user="'+esc(ev.rec.user)+'" title="Click to filter to '+esc(ev.rec.user)+'">'+esc(ev.rec.user)+'</td>'):'<td class="mono">&mdash;</td>';}},
   {h:"Application", sk:function(ev){return ev.rec.appLabel.toLowerCase();}, cell:function(ev){return '<td title="'+esc(ev.rec.appLabel)+'">'+esc(ev.rec.appLabel)+'</td>';}},
-  {h:"Target", sk:function(ev){return ev.rec.targetL;}, cell:function(ev){return '<td class="mono lnk" data-q="'+esc(baseName(ev.rec.target))+'" title="'+esc(ev.rec.target)+'">'+esc(ev.rec.target||"—")+'</td>';}}
+  {h:"Target", sk:function(ev){return ev.rec.targetL;}, cell:function(ev){return '<td class="mono" title="'+esc(ev.rec.target)+'">'+esc(ev.rec.target||"—")+'</td>';}}   // plain cell → detail pane (search link lives there)
 ];
 function filteredTime(){
   var out=[];
@@ -1543,7 +1543,8 @@ function kv(label,val,mono){ if(val==null||trimStr(val)==="") return "";
 function renderDetail(rec){
   DETREC=rec;
   var tgtHl=hlClassFor(rec.targetL);
-  var h='<div class="mono" style="font-size:14px;margin-bottom:6px">'+typeTag(rec)+' <b class="'+(tgtHl||"")+'">'+esc(rec.target||"(no target path)")+'</b></div>';
+  var h='<div class="mono" style="font-size:14px;margin-bottom:6px">'+typeTag(rec)+' <b class="'+(tgtHl||"")+'">'+esc(rec.target||"(no target path)")+'</b>'
+    +(rec.target?(' <span class="lnk" style="font-size:12px;font-family:Segoe UI,Arial" data-q="'+esc(baseName(rec.target))+'" title="Search the loaded rows for this file name">search this file name</span>'):'')+'</div>';
   h+='<div style="margin-bottom:6px">'+tagHtml(rec)+'</div>';
   if(rec.reasons.length){ h+='<div style="font-size:12px;color:#ff9b9b;margin-bottom:6px">';
     for(var q=0;q<rec.reasons.length;q++) h+="&bull; "+esc(rec.reasons[q])+"<br>"; h+='</div>'; }
