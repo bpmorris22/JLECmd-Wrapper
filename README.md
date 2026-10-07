@@ -17,8 +17,8 @@ targets, LNK arguments, UNC/removable, foreign tracker host):
 
 ![Entries](screenshots/02-entries.png)
 
-Timeline view — first/last-opened events from automatic entries plus per-file activity for custom
-jump lists, flattened and sorted:
+Timeline view — last-opened and target-created events from automatic entries plus per-file activity
+for custom jump lists, flattened and sorted:
 
 ![Timeline](screenshots/03-timeline.png)
 
@@ -55,8 +55,11 @@ the matching Automatic/Custom sibling into one dataset.
 
 - **Entries** — one row per destination entry (automatic + custom, unified). Click any row for a full
   detail pane: every timestamp, target, volume, tracker MachineID/MAC, MFT entry, and source.
-- **Timeline** — one activity event per row: first/last-opened times from automatic entries, plus
-  per-file activity for custom jump lists, flattened and sorted.
+- **Timeline** — one activity event per row: the last-opened time (DestList last modified) and the
+  target's creation time (once per target) from automatic entries, plus per-file activity for custom
+  jump lists, flattened and sorted. The DestList *created* time is not used: JLECmd derives it from the
+  target's object-ID (v1 GUID) timestamp, which can lag the real clock by days on long-running machines,
+  so it is shown in the detail pane only, labelled as a GUID time.
 - **Applications** — one row per AppId (application), rolled up: entry counts, distinct targets, users,
   and first/last activity. Click to filter Entries to that app.
 

@@ -206,7 +206,7 @@
       <h3 id="tableTitle">Entries</h3>
       <div class="row hide" style="margin-bottom:8px" id="viewToggle">
         <button class="btn on" id="vEntries" title="One row per jump-list destination entry (automatic + custom, unified)">Entries</button>
-        <button class="btn" id="vTime" title="One row per activity event — first/last-opened times from automatic entries, plus per-file activity for custom jump lists, flattened and sorted">Timeline</button>
+        <button class="btn" id="vTime" title="One row per activity event — last-opened time and target-created time from automatic entries, plus per-file activity for custom jump lists, flattened and sorted (DestList created / tracker times are object-ID GUID times and stay in the detail pane)">Timeline</button>
         <button class="btn" id="vApps" title="One row per application (AppId), rolled up">Applications</button>
       </div>
       <div class="row hide" style="margin-bottom:8px" id="jlCats">
@@ -259,7 +259,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.0";
+var APP_VERSION = "0.8.1";
 var PENDING_VIEW = "";               // CLI /view: deep-link, honored once after the first dataset loads
 var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
 var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
@@ -1133,12 +1133,17 @@ function buildApps(){
 /* ---------- timeline events (spec §7) ---------- */
 function mkEv(ts, kind, rec){ return {t:ts, ms:msOf(ts), day:dayOf(ts), kind:kind, rec:rec}; }
 function buildEvents(){
-  EVENTS=[]; var seenCustom={}, i, r;
+  EVENTS=[]; var seenCustom={}, seenTgt={}, i, r;
   for(i=0;i<ROWS.length;i++){ r=ROWS[i];
     if(r.type==="A"){
-      var c=r.created, m=r.modified;
-      if(c && m && c===m){ EVENTS.push(mkEv(m,"opened",r)); }
-      else { if(c) EVENTS.push(mkEv(c,"first opened",r)); if(m) EVENTS.push(mkEv(m,"last opened",r)); }
+      /* DestList CreationTime is decoded from the target's object-ID (v1 GUID) timestamp, not from an
+         open: the GUID clock can lag the real clock by days (seen on a long-running server VM), so it is
+         kept in the detail pane only. The timeline uses the DestList last-modified time (last opened)
+         and the target's own creation time, once per target. */
+      var m=r.modified, tc=r.tgtCreated;
+      if(m) EVENTS.push(mkEv(m,"last opened",r));
+      else if(r.created) EVENTS.push(mkEv(r.created,"DestList created (object-ID time, approx.)",r));
+      if(tc){ var tk=r.targetL+"|"+tc; if(!seenTgt[tk]){ seenTgt[tk]=1; EVENTS.push(mkEv(tc,"target created",r)); } }
     } else {
       if(!seenCustom[r.src]){ seenCustom[r.src]=1; if(r.srcModified) EVENTS.push(mkEv(r.srcModified,"app activity (custom)",r)); }
     }
@@ -1554,12 +1559,12 @@ function renderDetail(rec){
   h+=kv("Pin status", rec.pinStatus);
   h+=kv("Entry number", rec.entryNum, true);
   h+='<h3>Timestamps (UTC)</h3>';
-  h+=kv("Entry created (DestList)", rec.created, true);
+  h+=kv("DestList created (object-ID GUID time - not an open; can lag by days)", rec.created, true);
   h+=kv("Entry last modified", rec.modified, true);
   h+=kv("Target created", rec.tgtCreated, true);
   h+=kv("Target modified", rec.tgtModified, true);
   h+=kv("Target accessed", rec.tgtAccessed, true);
-  h+=kv("Tracker created on", rec.trackerCreated, true);
+  h+=kv("Tracker created on (object-ID GUID time)", rec.trackerCreated, true);
   h+='<h3>Target &amp; volume</h3>';
   h+=kv("Local path", rec.target, true);
   h+=kv("Common path", rec.commonPath, true);
