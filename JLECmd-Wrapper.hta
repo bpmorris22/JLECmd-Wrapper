@@ -259,7 +259,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.2";
+var APP_VERSION = "0.8.3";
 var PENDING_VIEW = "";               // CLI /view: deep-link, honored once after the first dataset loads
 var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
 var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
@@ -1911,6 +1911,8 @@ function init(){
       if(ix>=0&&ix<rows.length){
         var rr=rows[ix].rec||rows[ix];
         renderDetail(rr);
+        try{ var dc=$("detailCard"), dt=dc.getBoundingClientRect().top;   // the card sits below the table: bring it on-screen, but only if it isn't already
+          if(dt<0 || dt>document.documentElement.clientHeight-120) dc.scrollIntoView(true); }catch(es){}
         var trs=$("tbl").getElementsByTagName("tr");
         for(var z2=0;z2<trs.length;z2++){ if(trs[z2].getAttribute("data-i")!=null){
           var zi=parseInt(trs[z2].getAttribute("data-i"),10);
