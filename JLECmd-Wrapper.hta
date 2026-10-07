@@ -56,6 +56,8 @@
   header h1{display:inline-block;font-size:15px;margin:0;font-weight:600;vertical-align:middle}
   header h1 small{color:#8b949e;font-weight:400}
   .pill{display:inline-block;font-size:11px;color:#8b949e;border:1px solid #30363d;border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
+  .pill.run{color:#ff8b3d;border-color:#bd561d}     /* orange: a run is in progress */
+  .pill.err{color:#ff8b8b;border-color:#b02020}     /* red: the run timed out / produced nothing */
   .pill.ok{color:#7ee787;border-color:#2ea043}
   .pill.bad{color:#ff8b3d;border-color:#bd561d}
   .wrap{padding:12px 14px}
@@ -131,6 +133,7 @@
   <span class="pill" id="verpill" title="JLECmd.exe version">JLECmd: checking&hellip;</span>
   <span class="pill" id="srcpill">no data loaded</span>
   <span style="float:right">
+    <span class="pill" id="procTimer" title="Processing time. Starts when a run begins and stops when it finishes, so you can see how long the artifact actually took to parse. The app is single-threaded, so the counter can pause during a heavy step (a multi-GB parse, a hive replay) and then jump forward - that is the step blocking, not a stall." style="min-width:150px;text-align:center;display:inline-block">Idle</span>
     <button class="btn" id="instrBtn" onclick="openInstructions()" title="Download the latest HTML field guide from GitHub and open it in your browser">Instructions</button>
     <button class="btn" id="helpBtn" onclick="openHelp()" title="Help, about &amp; GitHub link">Help</button>
     <button class="btn primary hide" id="selfUpd" onclick="doSelfUpdate()" title="A newer version is available on GitHub">Update</button>
@@ -256,7 +259,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.7.5";
+var APP_VERSION = "0.8.0";
 var PENDING_VIEW = "";               // CLI /view: deep-link, honored once after the first dataset loads
 var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
 var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
@@ -328,6 +331,15 @@ function appendLog(t){ var el=$("log"); if(el.getAttribute("data-ph")==="1"){ el
   el.style.display="block"; $("logToggle").innerHTML="Hide log"; el.innerHTML+=esc(t)+"\n"; el.scrollTop=el.scrollHeight; }
 function trimStr(s){ return String(s).replace(/^\s+|\s+$/g,""); }
 function baseName(p){ if(!p) return ""; p=String(p); var i=Math.max(p.lastIndexOf("\\"),p.lastIndexOf("/")); return i>=0?p.substring(i+1):p; }
+/* the Windows user account a jump list belongs to — the LAST \Users\<name>\ segment of its SourceFile path.
+   A collection opened from the analyst's own profile (C:\Users\<analyst>\Documents\Collection-…\uploads\
+   auto\C%3A\Users\<suspect>\…) has two, and the first is the examiner, not the evidence.
+   Velociraptor %-encodes path components, so decode the name. */
+function userFromSrc(s){ if(!s) return "";
+  var re=/[\\\/]users[\\\/]([^\\\/]+)[\\\/]/ig, m, u="";
+  while((m=re.exec(String(s)))){ u=m[1]; re.lastIndex=m.index+1; }
+  try{ u=decodeURIComponent(u); }catch(e){}
+  return u; }
 function showEl(id,vis){ var e=$(id); if(!e) return; var c=e.className.replace(/\s*\bhide\b/g,"");
   e.className = vis ? c : (c+" hide"); }
 function msOf(s){ if(!s) return 0; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
@@ -400,6 +412,34 @@ function runBat(lines, show){
   return { rc:rc, log:txt };
 }
 
+/* ---------- processing-time pill (ported from vSphere Support Bundle Analyzer) ----------
+   A long parse used to read as a hang: the status line ticks, but nothing said how long the run had
+   taken or how long the previous one took. #procTimer lives in the header and holds three states -
+   Idle, an orange live counter while the tool runs, and a final green "Processing time mm:ss" (red
+   if the watchdog gave up waiting). The HTA is single-threaded, so the counter can freeze during a
+   blocking step and then jump; the pill tooltip says so rather than letting it look broken. */
+var PROC_T0=0, PROC_TIMER=null, PROC_WHAT="Processing";
+function procFmt(s){ var m=Math.floor(s/60), ss=s%60; return (m<10?"0":"")+m+":"+(ss<10?"0":"")+ss; }
+function procStart(what){
+  PROC_WHAT=what||"Processing";
+  PROC_T0=(new Date()).getTime();
+  if(PROC_TIMER) window.clearInterval(PROC_TIMER);
+  PROC_TIMER=window.setInterval(procTick,500);
+  var el=$("procTimer"); if(el){ el.className="pill run"; el.innerHTML=PROC_WHAT+" 00:00"; }
+}
+function procTick(){ if(!PROC_T0) return; var el=$("procTimer"); if(!el) return;
+  el.innerHTML=PROC_WHAT+" "+procFmt(Math.floor(((new Date()).getTime()-PROC_T0)/1000)); }
+function procStop(ok){
+  if(PROC_TIMER){ window.clearInterval(PROC_TIMER); PROC_TIMER=null; }
+  if(!PROC_T0) return;
+  var s=Math.floor(((new Date()).getTime()-PROC_T0)/1000), el=$("procTimer");
+  if(el){ el.className=(ok===false?"pill err":"pill ok"); el.innerHTML="Processing time "+procFmt(s); }
+  PROC_T0=0;
+}
+/* the run finished but produced nothing usable - recolour the stopped pill so the header agrees
+   with the error in the status line instead of showing a reassuring green time. */
+function procFail(){ var el=$("procTimer"); if(el && !PROC_T0) el.className="pill err"; }
+
 /* Run a batch NON-blocking; writes a .done marker when finished. Caller polls with pollDone(). */
 function runBatAsync(lines, show){
   var fso=new ActiveXObject("Scripting.FileSystemObject");
@@ -434,11 +474,12 @@ function pollDone(ctx){
     try{ fso.DeleteFile(ctx.bat); }catch(e1){}
     try{ fso.DeleteFile(ctx.done); }catch(e2){}
     try{ if(fso.FileExists(ctx.log)) fso.DeleteFile(ctx.log); }catch(e3){}
+    if(ctx.procTimed) procStop(true);
     ctx.onDone(log);
     return;
   }
   ctx.elapsed+=1;
-  if(ctx.elapsed>1800){ ctx.onTimeout&&ctx.onTimeout(); return; }
+  if(ctx.elapsed>1800){ if(ctx.procTimed) procStop(false); ctx.onTimeout&&ctx.onTimeout(); return; }
   if(ctx.onTick) ctx.onTick(ctx.elapsed);
   window.setTimeout(function(){ pollDone(ctx); }, 1000);
 }
@@ -467,6 +508,31 @@ function populateSourceFilter(vals){
 /* ---------- tooling: locate / version / download ---------- */
 function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FileExists(p); }catch(e){ return false; } }
 function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
+/* ---------- long paths (MAX_PATH, family 2026-10-03) ----------
+   mshta is not long-path aware: plain FSO FileExists / FolderExists / GetFolder report a path of 260+ characters
+   as missing even when it exists (VERIFIED 2026-10-03, Win11 + LongPathsEnabled=1: 259 chars seen, 260 not), and
+   Velociraptor / KAPE collection paths routinely exceed that. The same FSO calls DO see such a path through its
+   \\?\ extended-length form, so a long path is re-checked that way (lpKind). An operator-given input that even the
+   \\?\ form cannot see is still trusted: a note is logged and the long-path-aware engine reports a genuine miss -
+   an FSO miss on a long path is never treated as authoritative. */
+var MAXP=259;
+function isLongPath(p){ return String(p||"").length>MAXP; }
+function lpForm(p){ p=String(p||"").replace(/\//g,"\\");
+  if(/^[A-Za-z]:\\/.test(p)) return "\\\\?\\"+p;
+  if(/^\\\\[^\\?.]/.test(p)) return "\\\\?\\UNC\\"+p.substring(2);
+  return ""; }
+function lpKind(p){ var q=lpForm(p); if(!q) return "";   // "f" file / "d" folder / "" not seen, through the \\?\ form
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); if(fso.FileExists(q)) return "f"; if(fso.FolderExists(q)) return "d"; }catch(e){}
+  return ""; }
+function inputSeen(p, wantDir, what){
+  if(wantDir ? folderExists(p) : fileExists(p)) return true;
+  if(!isLongPath(p)) return false;
+  var k=lpKind(p);
+  if(k && k!==(wantDir?"d":"f")) return false;   // it exists, but as the other kind
+  appendLog("Note: the "+what+" path is "+String(p).length+" characters (over MAX_PATH) - "+(k
+    ? "verified through its \\\\?\\ extended-length form."
+    : "this app cannot verify it; the engine reads it and reports it if it is really missing: "+p));
+  return true; }
 function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
 function htaFolder(){
   try{ var cl=jlecmdHta.commandLine+""; var m=cl.match(/"([^"]+\.hta)"/i); if(!m) m=cl.match(/([A-Za-z]:\\[^"]+\.hta)/i);
@@ -617,8 +683,11 @@ function checkVersion(){
   }catch(e){ LOCAL_VER=""; updateVerPill(); setStatus("Version check failed: "+e.message,"err"); }
 }
 function canListFolder(p){
-  try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
-    var e=new Enumerator(fso.GetFolder(p).Files); e.atEnd(); return true; }catch(err){ return false; }
+  var c=[p], q=lpForm(p), i;
+  if(q) c.push(q);   // the \\?\ form also reaches a folder near / over MAX_PATH
+  for(i=0;i<c.length;i++){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var e=new Enumerator(fso.GetFolder(c[i]).Files); e.atEnd(); return true; }catch(err){} }
+  return isLongPath(p) && !lpKind(p);   // a long path this app cannot see at all: the engine reports a real access problem
 }
 
 /* ---------- target hostname + _Processed output convention (family, 2026-07-06) ----------
@@ -738,10 +807,10 @@ function processJl(){
   var inmode=$("inMode").value;
   var fso=new ActiveXObject("Scripting.FileSystemObject");
   if(inmode==="d"){
-    if(!inp||!fso.FolderExists(inp)){ setStatus("Directory not found: "+inp,"err"); return; }
+    if(!inp||!inputSeen(inp,true,"input folder")){ setStatus("Directory not found: "+inp,"err"); return; }
     if(!canListFolder(inp)){ setStatus("Access denied reading "+inp+" — another user's profile needs an ELEVATED run. Relaunch as administrator, or point at a collected copy.","err"); return; }
   }
-  else { if(!inp||!fso.FileExists(inp)){ setStatus("File not found: "+inp,"err"); return; } }
+  else { if(!inp||!inputSeen(inp,false,"input file")){ setStatus("File not found: "+inp,"err"); return; } }
   if(!outdir){ setStatus("Set an output directory","err"); return; }
   if(!EXE||!fileExists(EXE)){ setStatus("JLECmd.exe not found — download it first","err"); return; }
   var flag=(inmode==="d")?"-d":"-f";
@@ -766,6 +835,7 @@ function processJl(){
     "echo.",
     '"'+batEsc(EXE)+'" '+flag+' "'+binp+'" --csv "'+bout+'"'+extra+' > "__LOG__" 2>&1'
   ], true);
+  ctx.procTimed=true; procStart("Processing");
   ctx.onTick=function(s){ setStatus("JLECmd running… "+s+"s elapsed (app responsive; results load when done)","muted"); };
   ctx.onTimeout=function(){ BUSY=false; $("procBtn").disabled=false; setStatus("JLECmd still running after 30 min — stopped watching. Check the output folder / console window.","err"); };
   ctx.onDone=function(log){ BUSY=false; $("procBtn").disabled=false; processJlDone(log,outdir,before); };
@@ -777,7 +847,8 @@ function processJlDone(log,outdir,before){
   LASTOUTDIR=outdir;
   var all=listCsvFiles(outdir);
   var fresh=[]; for(var i=0;i<all.length;i++){ if(!before[all[i].name]) fresh.push(all[i]); }
-  if(!fresh.length){
+  /* completed but produced no new CSV - recolour the header pill so it does not read as a clean run */
+  if(!fresh.length){ procFail();
     if(/denied|unauthorized/i.test(log))
       setStatus("JLECmd was denied access to the input — an elevated run is needed for other users' profiles.","err");
     else if(/Found 0|0 auto|0 custom/i.test(log))
@@ -941,7 +1012,7 @@ function ingestJlRows(raw, idx, type){
     var target=firstNonEmpty([cell(rw,iLocal), cell(rw,iTIA), cell(rw,iPath), cell(rw,iRel), cell(rw,iCommon)]);
     if(!src && !target) continue;
     var srcM=cell(rw,iSrcM), created=cell(rw,iCreat), modified=cell(rw,iMod);
-    var user=""; var mu=String(src).match(/\\Users\\([^\\]+)\\/i); if(mu) user=mu[1];
+    var user=userFromSrc(src);
     var appId=cell(rw,iAppId), appD=trimStr(cell(rw,iAppD));
     var args=cell(rw,iArgs), wd=cell(rw,iWD);
     // primary activity timestamp: automatic → LastModified (fall back CreationTime); custom → file mtime
@@ -1721,9 +1792,27 @@ function init(){
 
   var zoom=0.9;
   var zContent=$("content");
-  function applyZoom(){ zContent.style.zoom=zoom; zContent.style.width=(100/zoom)+"%"; var p=Math.round(zoom*100)+"%";
+  /* A+ / A- text scaling. <header> and the modal cards live OUTSIDE #content, so zooming #content
+     alone left the app's top row - and the Help dialog - at a fixed size while everything else grew
+     or shrank. Each block is zoomed and then widened by 1/zoom, because a zoom<1 shrinks a 100%-wide
+     block to less than the viewport and leaves a blank gutter down the right edge. For the modals the
+     CARD is scaled and not the fixed overlay, so the dim backdrop still covers the whole viewport at
+     any zoom level. (Ported from vSphere Support Bundle Analyzer.) */
+  function zoomBlock(el){ if(!el) return; el.style.zoom=zoom; el.style.width=(100/zoom)+"%"; el.style.boxSizing="border-box"; }
+  var ZOOM_MODALS=["helpModal"];
+  function applyZoom(){
+    zoomBlock(zContent);
+    var hs=document.getElementsByTagName("header"); if(hs.length) zoomBlock(hs[0]);
+    for(var mi=0;mi<ZOOM_MODALS.length;mi++){ var m=$(ZOOM_MODALS[mi]); if(!m) continue;
+      var cards=m.getElementsByTagName("div");
+      for(var ci=0;ci<cards.length;ci++){ if(/(^|\s)mcard(\s|$)/.test(cards[ci].className+"")){ cards[ci].style.zoom=zoom; break; } } }
+    var p=Math.round(zoom*100)+"%";
     $("fup").title="Larger text ("+p+")"; $("fdown").title="Smaller text ("+p+")"; }
   applyZoom();
+  /* re-assert the zoom-compensated widths on resize/maximise, so full-screening reflows to fill;
+     the header needs it too now that it is zoomed alongside #content. */
+  try{ window.onresize=function(){ try{ zContent.style.width=(100/zoom)+"%";
+    var hr=document.getElementsByTagName("header"); if(hr.length) hr[0].style.width=(100/zoom)+"%"; }catch(er){} }; }catch(eR){}
   $("fup").onclick=function(){ zoom=Math.min(zoom+0.15,2.5); applyZoom(); };
   $("fdown").onclick=function(){ zoom=Math.max(zoom-0.15,0.6); applyZoom(); };
 
@@ -1903,8 +1992,11 @@ function applyCli(cli){ if(!cli.input) return false;
   var fso=new ActiveXObject("Scripting.FileSystemObject");
   applyCaseWindow(cli.from, cli.to);   // case window (UTC): prefill the date filter BEFORE any /auto run — filter only, never scored
   if(/\.csv$/i.test(cli.input) && fso.FileExists(cli.input)){ appendLog("CLI: loading CSV "+cli.input); window.setTimeout(function(){ loadCsvFile(cli.input, true); },60); return true; }
-  if(fso.FolderExists(cli.input)){ $("inMode").value="d"; $("jlPath").value=cli.input; }
-  else if(fso.FileExists(cli.input)){ $("inMode").value="f"; $("jlPath").value=cli.input; }
+  var lng=isLongPath(cli.input) && !/\.csv$/i.test(cli.input), lk=lng?lpKind(cli.input):"";   // FSO cannot see a 260+ char path: ask its \\?\ form
+  if(fso.FolderExists(cli.input) || lk==="d"){ $("inMode").value="d"; $("jlPath").value=cli.input; }
+  else if(fso.FileExists(cli.input) || lk==="f"){ $("inMode").value="f"; $("jlPath").value=cli.input; }
+  else if(lng){ $("inMode").value=(/\.(automatic|custom)Destinations-ms$/i.test(cli.input)?"f":"d"); $("jlPath").value=cli.input;
+    appendLog("CLI: the input path is over MAX_PATH and could not be verified here - treating it as a "+($("inMode").value==="f"?"file":"folder")+"; JLECmd reports it if it is really missing."); }
   else { setStatus("CLI input not found: "+cli.input,"err"); appendLog("CLI input not found: "+cli.input); return false; }
   if(cli.outDir){ $("outDir").value=cli.outDir; OUT_TOUCHED=true; hostGuessFrom(cli.outDir); }
   else hostGuessFrom(cli.input);
@@ -1995,5 +2087,53 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
   </div>
 </div>
 
+<script>
+/* ---------- app icon (toolkit icon set) ----------
+   HTA:APPLICATION ICON= is ignored in IE=edge document mode, so the window icon is set at runtime:
+   a hidden, async PowerShell decodes the embedded .ico to %TEMP%, sends WM_SETICON to this mshta's
+   visible windows (title bar + taskbar), then deletes its own script. Cosmetic only - every failure is silent.
+   Self-contained on purpose (own uid, no app helpers) so the same block drops into every family app. */
+var APP_ICON_B64="AAABAAYAEBAAAAEAIAB+AgAAZgAAABQUAAABACAA0wIAAOQCAAAYGAAAAQAgAHUDAAC3BQAAICAAAAEAIADdAwAALAkAACgoAAABACAAUwQAAAkNAAAwMAAAAQAgADMFAABcEQAAiVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAITSURBVDhPlZJfaJJhFMZ/r37qbNJolI2QLfGmqV9JjFEXoz9SGa2LQRD0Bwq62J3dRETRVbGL6mIQIUF0MQqKghirIJA2WlA5SgokIQpc0eaWS51zLr/v7Ua/nK2xfnfncJ6H9zznFQCqqrp0XesDuVMI4WJ5pkEO67q4nEgk4kJVVZeU2jtgbf3kckgpyyaT7BI+n3dACI5ZGhxs2X+KDe3bAYgP3SD1foTWzTswW+2LxN+Tb5jPZwA5Kny+9nEhhKt91xF8u4+SfPGAxjUtbNy6h8dXjhM6fQvFttgg9vAan14NIqUsK9WdFYuNheIsH57dxukJ4O4IoWsa0UjYMChmp8hPfzOMhBCKUi1y6RQNjmaCvf1Y7A7m8xmkrrEvfNMQZCe/8OTqCaMGEH6/V1YLT2c369wqAInnd8ilU9gam1AqGZTmspRLxT9qwFRblAo/AdD1MgvF2UovS2FmgsLMxF9ial/QFgjSeegMma9JLHYHZsVKNBLm4Nm7/wwRwMhgtbOV0lyWaCSM0xMg2NuPWbHy+n7fkmesYhiUf5VQrHbcHSGanG0AmC1W/HtPGhn8GE/ycuCiIabW4OPIPZpdm9h2+BwAbwevk0un+Bx7isW2CiqXqkf4/d6p//3GtZhADtc3V4qUckxcGpoMCJOIIYSxzorRtR7The71cYneBYwiZbl+ZmnkGLrWc/5Ay6PfzJ/EKRzvc4sAAAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAAFAAAABQIBgAAAI2JHQ0AAAABc1JHQgCuzhzpAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwwAADsMBx2+oZAAAAmhJREFUOE+dkl9IU1Ecxz9nblNzmJpOrRBkQbq7QENCkKDRi4FIUCGBbxL0kC/RixHJIHoRwl6E6CUqIgmRysoHQSRLCSFpYxZagqitls6p2/TOu9uDerv3Kkr7wIFzvr8//P4cwRaSVNEAlhYh1FoQJdv6PvwBRoWgx+8PPgIQAB6PuwO4Yfb+T54HAsHLQpIqGoSwvDZb06RVSJK7VwjOA2TY7JxsbKX0+CkA1lYWCQw8Zn5ihJz8EnIKjJNQkjILM0Gdoo4Lj6fy5/bMymvqqW1qY2EmiJKUyXWWISdW6e9s4YLvDRk2uy54k7HeTiY/9gKgquqGVb8AR0EpAB+e+ohFQtQ2teF0VaEkZYaf3CYz5+C/TFvMT4xodyGE1WKw7kFhmZtiV7V2ln/PMD3Wz3osavCz6h+RuUkAGm92a9ri7DesmdkcPXEaqz1b05dCP0zz20R4PG5VL5TX1Gutp1IKs/73RH9N6132ZEfLsUhIu8vxFdbjxpb2w1Ch01XF2av3DQ7haT+DD69zpqVj12/zua/LsBhDhcWuagAGuq7x6m4TM1+GOJBXREpRiEfDxBZDhpOIhkmurepTGJeyTXwpTCwSQpETAKgphanRlzgOHdHec8GRHckwJ0wsLwBQ19yufezkeoIMmx3vlXuGjz0x+Izxtw900ZsYZmjLclDX3E6uswy2ZvR1qJvvn/rIP3wMW7ZDC4zMTe1aoZCkyogQIs9sSBeLEGLYLKaLqhKwCEGP2ZA+ao8AuPMu/ELARbP5PxmWswq9FoBb54ouqalUKzCOqm6YPfdChQDgk7MKvT6v2PgLv7rvFXptyAAAAAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAAGAAAABgIBgAAAOB3PfgAAAABc1JHQgCuzhzpAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwwAADsMBx2+oZAAAAwpJREFUSEutk21oU1cYx3/PTdqkSWra+NbgS6h+qE2jMCzBsQ9OkNGKXzYQ1omDDb8KwlZQVHRQ0CGCn1REnQyhDAVFyyhzg5YJLSXYZdWObkpraa0v0TY2pe1Nbs4+pL2mJ4JV84MD9/7P/zkP55z/EeYIhULu8nLvfuATYAuwbH5uMSilJkBiInQ7HCWn4vH4BIAAbNq0IWJZclVENuiF74NSakQpaerv778joVDI7fN5eou1eB4J08zUOtasWfW9iHypz7rLA7i8fkrLfGTMaVBKt7wNj2EYSyQSCd8Cds6rYjjY+u0JgjVR2zk7laSrtYWxgR4Cq2vwV1Xbc/mesYEeVNayNaW4J5FI+Hn+hQZrony69yTPB/tIvRgFoLq+gcf/dNF56QC7WtpxusrsRfL58/IhRu7fWaA59bS4ywMAPOxpYzDWDnMNnKW5RTsuNuNbuiq/BIBsJs3Yvz26jKELb8Pl8eMLBO0BMBhr59Fff2ClTd2OUxemxp8AEN62m3X1jbY+M5UE4OOmwwVHlBjqYzKRO04diUTCBfGI7mpmXX0jYjgAmEyM0tXawovhfryVVXgDVbZ3NpUk+XQwr3ohb2xQTN7YoG7711RvbsBw5HaQSowSu3GaV8+GcbrKcHn8eglWxmRm8qUuFzZYujbMZ/vOMjuVzD0wwFtZxdDd23S1tvDFsZu4vIUNADouNDM2sDBJBZe8ZMVaAHrbztgxbTrZice/HID4r+fxVOS+88lmLV6ODOjyu8f0yX8xnj7stcdwvIO+337i/u8/MzuXtHwKdpCeTgGwPrqTles/snUrk8v4ju8uF8S07cevFh9TR0kpDfsv2kcFoLIW3b8cZ+jubYI1Ufu1A1jmNMN/d9r/OgUN5vFWvs66OZ0iPZPb2bsidXW14yJSoU8UCwMkpovFQz0wROjW5WKhlHTL0evjFSXudJ8gq3XDB6FIGZLZaPzweeWEQvYACd3z3ihSkP3mYGNwyAA40ri8w0ybtYicU3BP9y8WpXigkCuGZDYe2rHyGsD/eVQVMJ0sm5cAAAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAAIAAAACAIBgAAAHN6evQAAAABc1JHQgCuzhzpAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwwAADsMBx2+oZAAAA3JJREFUWEfFl1FoW1UYx39fkjbpsjZrdF1wZTJsra7BbtiHrq3kQYZSRmXKKCJC8Un2IjgGrhNFGcMHfSiIMBlY8EGL00HRPiiMQlIp29BCb6LViaN22s6s3dbMhbb3Hh+axHtP0zStvfqD8/L/vnPP/3z3nHvPgf8Z0YVYLOZLp2d7RaRDKWkVIarnbAx1FeQKMGpZDKRSqYw96jAQjUYfAfMTkP12fQu5JmI9PzHx41heKBjIDX4ZZHsh3QWUUsvgOZRMJkcAPOTKnpu5q4MDiIgPrI9bWlp2kDeQTs/2ulj2VYhIvWkuHSdvQEQ69KT/gE7ya6C5ed/EWqv9wOFjNLYfwVtRCYCyTH4zEox9ehpzaZGKwHZqdzfo3QDILsxx58aULudQGcP4oVoAotF9Sg8DhOubeOqVD1nKZli8t7J7fJVV+IMhLn/+Hr9c+oruvkG2hXbqXQuMnDvBH5OXdBkAw0iJTxfthCJ7AZiMn2fi648A2Nv6NG09J6mquQ9lmUyNXyRc36T1XGF58R6Zm9d12UHJCuQHM74ZWGXArm0Ww0iJRxeLUREIEqyNEKyN4A+GHLH2F96gu2/Q0Q4cPubIKUVJAzenUgA0PXF01cMX0tOIx0tN3YMFc/lWU7dHe9LalHwFAI3tR3i449nCLrBMk+vJBOPDZ1GWqadvCMNIyboG3KQsA/XNnTQcfAavz/4diPPztxf01A2zroFtoZ109w0iHq8eIj5wiulkgthL7/DAowf1MOQ+RCPnTjD/+1U9BOXsgl2NjyMeL5Pxzxg608PQmR6+//IDAGp3NyIeL4HqsN6tgK+yCp+/SpcdlKxAsT1fTNss61agHBraumnrOeloex6L6WlrUrICdQ/t58mX+4v+C74bep+fRr/gubeGqAg4jxG3Z39l+N1eh1aMdRchQMeLb6+a0dz0JBfPvspSNrPy8QlHHPE7N6bILsw5tGKUZQAgUB12bMO/bv+pp2yKstdAdmGOu/Mz3J2f2bLB8+QMqOIb1V2y/GNArmhB11GKcWx/w1Fn2H1ESJA3YFkMANf0JLdQSt0S8fZjv5icHp5pEzxxpPQxbUtQ1tFTXbvOYz+QvN4VGbNEDinUtCN5S1G37IOj3w0B3rwwv8PvXz6uUJ0grQj/7rakyCKMgyS8iv7Xuu53cYKb4G8//VGn3pirpwAAAABJRU5ErkJggolQTkcNChoKAAAADUlIRFIAAAAoAAAAKAgGAAAAjP64bQAAAAFzUkdCAK7OHOkAAAAEZ0FNQQAAsY8L/GEFAAAACXBIWXMAAA7DAAAOwwHHb6hkAAAD6ElEQVRYR9WYcWgbVRzHP++OStd2tlkbG12tGwy2Za2RQWddCyoVQZGCbLDNqdj/KlgGG4iITCw4JxNGobA5lA1BRPxDqaX9Zy0MRTZoR2rOjlJGdRRtm9kumNU0yd3zj+bS3GvW3rGuqR94f+T7fpf78n3v9y452OAIVbCpr9/VaFmiWQieBp4CsUOtuR+klJMghkAOaxpXI5Ebl9Ua8hkMhUIVppk8C+Itde4B0yuE/nYkEpnMFR0Gg8FgsxDyGyFETa6+Xkgp7whBm2Hc+MHWsgZDoVBFOp2MFMrcEjKu61b9yMjY7wCaLZtm8mzhzQGIMtPUL9qfdDINAVq3o66wbPP7K8ei0duGBmBZolmtKDyiCXuJM0fJRqMRu0nq6naPr3bOFW/eQt0Lb/LY7mccemxqAuPyV/x9a9ShrwEJwxjdlDEYlOqsSsOBE+xobFVlAO7OTfHj6deQlknDgRM8unOfWuLgVniQcN/nqrwMwxgV2S5eDfum13u6GTh/LDsASn0BSsr9CE2nZk8zpb7AiqOm/lnl2++N6wRb3/+WUl+AgfPHmLkZzupHzlwBoOfUIe7OTVFUXIZv64q7hdnJMdIL/6ryMjwl6JZUIs7MzfCKw405mzU3uP/oSY6cueIYhz8dZP/Rk2qpK1wbjE1NANDS3uW4OYCZSrIwHwOg6ok9jusAhKbn1d3geg9W1gZpev1DSn0Bh26mkoz0X2Dsp+8A0Iseorhsi6MGIBGfxUwlVXlFDGNUuDZIJomScr9DW5iPedpTXvDcJNIykZbp0Lym4hXXCT78SC37Dr6Lf3u9Q5+PRQn3nuOP8EBWU7dBLtIymY9FVTkvnpa46Y1Oap/Mf8CmEnG+73wVM5XkxY5zVNYG1RIH0+PDDF44rsrL8LTElY/vBOCXrzvpOXUoOwCKisvyNsZa4DpBt0+StcRTgm4Rmr7s2VvqCyA0XS11hecEr/d0M/fneFZvae+CTILzsSgvHf+S8urtOVcuEpueoO8zb38UPSUYnYgAsLf1HVrau7IDIPHPLIn47GKH3snfoffSV8N1gpurtrK3tWP5D9bpCX7t/4LJ33526GuBp2OmEHha4kLx/zC4+CJnYyGlTLOUoBhS5guOEBgsGZTDyvwGYDE0DUDTuKpOFxoprWvYBjMvD3vVosIhw1VV1ZewD2qA0323a0xhRUBUOGrXGynT0pINH7xSHSb3mHnv5apJLKsNSdxxwXoiZVpKq8M2R26CNp/0/7XNkvpFhHhOnXvAhKVpteWaI59Bm4/7Zg4jRBPIRqSoQ1Cs1twXUqYRwkAwJE15LVXiv/TR8yKtlm14/gO4JqDsWn9QOgAAAABJRU5ErkJggolQTkcNChoKAAAADUlIRFIAAAAwAAAAMAgGAAAAVwL5hwAAAAFzUkdCAK7OHOkAAAAEZ0FNQQAAsY8L/GEFAAAACXBIWXMAAA7DAAAOwwHHb6hkAAAEyElEQVRoQ92ZXUyTVxjHf6dFBD9gaCkdfs86pULC/Fg00zRjQRkjblmWsM0b3cW2LEuWaczixGQmupCY7WpfGhPJLqZEdjHinJmySVyCwU0xq53EshEzJ1AUkEKRwnt2Qd/a90hL261Y/CUnKf/nSXr+nHOe87x9YYojVCEch8NhM5l4BdgspbQLwWMgbGre/0w3yF7AIyUNaWla3ZUrre1qkk5EA4WFBW8DB0HMUmOTiZRyBNhnsVirGxsbR9T4AwaKiormSzn6JVChxh4mUnJBCNN2l8t1LVw3GAhO/jJgCddTB+nTNLHR7Xa36IrJEB77z6fo5AHELJNJHnU6nWm6YtY/jO15sSOUm7II2+DgQLrX292AvoXGqo28/rAPbKxIKUekFGvdbneLCWCsVE6NyQMIIdKEkJWEnYHNxpSpgKhANyCltKvhVEcI7OhnoLCw4Fa8N+yc+cvJti0xaAG/j5t/NCG1UYOeLFwutwgacEg1GI2SNz8lb9lqVQZgsM/Lz4d3cLfrBgDCZMayyIEwhQreuPj7vPR331TlqCRkIL9gPc43qlXZgOdCPRe//QQmMKvSdGw/7ZfOqHJEXC63MFxksTB3wQoABno6OLbLaRh//XoagKzchaH8tOmZoc8TYU6brkoTEvcKFG3aTmHpNgZ6Oqj/uNIQW1e5myVryuhqa6Hhq/cAME9LZ+5ChyFvPAJ+Hz3/eFQ5KgmtQLyMBobpamuZcMQ7eZ2kG8hbtpp1lbvHHYtXlarpcRP3Fip49nWKy98iMOSj9XydITZv5QZy8u10Xv+Nnw6PtVUvVtUxIzvXkBdO3d4XCAz5VDkmEqpCsy3zqPjgG1U2cKn+M1rPnwDAvm4Li4qfU1MAuH3DTcupQ6ocMwkZAFi8qhRHyVay85SLbMiHp6keV8PXjNzzG2LJIGEDqcKkVKFkk9AKWJcWU+B89YFeaNjvw9P0HW3N309KP5TQFsqYPYeXquqi9jbNJw7S1nwSgPkrN/DkMy9HzSfYQ105dYjBPq8aikhCBlY4K3mq4p2oZfRWazPnjuyCGMpoOK4zNfz+41FVjojL5RZmAKs19yM1GInHlz+NdWkxQ/13OF+zx3CbWhatJCffjr/PG+qL7vl6mD4ji4Gejqij55aHa43HGR7sV78yIl1d3n1xr0C8vVAymbQqNDPHNu6Y6FzEQtINbNx2gC0f1o47ynfW/GcTcRvQn7Rm5th47WCjYSxZUwbBiqIzMyfyk2pm1hzM09JVOS7iPgPCZKZ8Zw1Z1vsPLeGMBoY5+8W73Pm7FYBpGbPImTf+bwZ3u24w1H9HlWMmoTJK0MSCwg1k254w6MN+H39e/CHh7jJeEjaQKkxaFUomj4yBbkWfMgQNyF41kOoEXz2FViCxnwQeLh7uGxCNSnAqcBbdgNk8elxfkqmClKIW/RVTZ+ftXqs1VwohStTEFOXI1avuzwkvoxaLtVpKLhjSUpN2TeN9/Q8RHjlw2rsCjcsIMsL1lEHKEU2I0r3P557TJcNFtqcs95rUtPVA6D1sqiAl7erkUQ0AVFXktQxnWNYKRDWpcrAFRwKZWpE6+bFQFPaf7CwWZvNWiSwTEvukbS0pRyR4hBBnNanV7i3P+0VNeWT4F+ijExr5BneTAAAAAElFTkSuQmCC";
+function setAppIcon(){
+  try{
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var ps1=fso.GetSpecialFolder(2)+"\\hta_icon_"+(new Date()).getTime()+"_"+Math.floor(Math.random()*1000000)+".ps1";
+    var L=[
+      "$ErrorActionPreference='SilentlyContinue'",
+      "$ico=Join-Path $env:TEMP 'JLECmd-Wrapper.ico'",
+      "[IO.File]::WriteAllBytes($ico,[Convert]::FromBase64String('"+APP_ICON_B64+"'))",
+      "$pp=(Get-CimInstance Win32_Process -Filter \"ProcessId=$PID\").ParentProcessId",
+      "Add-Type @'",
+      "using System; using System.Runtime.InteropServices;",
+      "public static class HtaAppIcon {",
+      "  public delegate bool EnumProc(IntPtr h, IntPtr l);",
+      "  [DllImport(\"user32.dll\")] static extern bool EnumWindows(EnumProc p, IntPtr l);",
+      "  [DllImport(\"user32.dll\")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);",
+      "  [DllImport(\"user32.dll\")] static extern bool IsWindowVisible(IntPtr h);",
+      "  [DllImport(\"user32.dll\", CharSet=CharSet.Unicode)] static extern IntPtr LoadImage(IntPtr i, string n, uint t, int cx, int cy, uint f);",
+      "  [DllImport(\"user32.dll\")] static extern int GetSystemMetrics(int i);",
+      "  [DllImport(\"user32.dll\")] static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l);",
+      "  public static int Apply(uint pid, string ico) {",
+      "    IntPtr sm = LoadImage(IntPtr.Zero, ico, 1, GetSystemMetrics(49), GetSystemMetrics(50), 0x10);",
+      "    IntPtr bg = LoadImage(IntPtr.Zero, ico, 1, GetSystemMetrics(11), GetSystemMetrics(12), 0x10);",
+      "    int n = 0;",
+      "    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);",
+      "      if (p == pid && IsWindowVisible(h)) { SendMessage(h, 0x80, (IntPtr)0, sm); SendMessage(h, 0x80, (IntPtr)1, bg); n++; }",
+      "      return true; }, IntPtr.Zero);",
+      "    return n;",
+      "  }",
+      "}",
+      "'@",
+      "for($i=0;$i -lt 20;$i++){ if([HtaAppIcon]::Apply([uint32]$pp,$ico) -gt 0){ break }; Start-Sleep -Milliseconds 500 }",
+      "Remove-Item -LiteralPath $PSCommandPath -Force"
+    ];
+    var f=fso.CreateTextFile(ps1,true); f.Write(L.join("\r\n")); f.Close();
+    new ActiveXObject("WScript.Shell").Run('powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+ps1+'"',0,false);
+  }catch(e){}
+}
+/* Started at parse time, not on "load": in some family apps a window load listener never fires after the
+   window.onload property handler. The helper itself waits (up to ~10 s) for the window to become visible. */
+setAppIcon();
+</script>
 </body>
 </html>
