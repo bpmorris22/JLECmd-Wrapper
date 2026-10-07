@@ -107,6 +107,8 @@
   .dl div{overflow:hidden;text-overflow:ellipsis}
   .kv{font-size:12px;margin:2px 0}
   .kv b{display:inline-block;min-width:150px;color:#8b949e;font-weight:400}
+  .kv.kvhl{background:#1f3a5f;border-radius:3px;padding:0 4px;margin-left:-4px}   /* the timestamp the clicked Timeline row came from */
+  .evban{font-size:12px;background:#10263f;border:1px solid #1f6feb;border-radius:6px;padding:5px 8px;margin-bottom:8px}
   .hl-user{color:#d29922}
   .hl-ioc{color:#ff6b6b;font-weight:700}
   #log{white-space:pre-wrap;font-family:Consolas,monospace;font-size:11px;color:#8b949e;max-height:140px;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;display:none;margin-top:8px;width:100%;box-sizing:border-box}
@@ -259,7 +261,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.8.3";
+var APP_VERSION = "0.8.4";
 var PENDING_VIEW = "";               // CLI /view: deep-link, honored once after the first dataset loads
 var KNOWN_LATEST_JLECMD = "1.5.0";                                               // baseline as of 2026-07-06
 var JLECMD_ZIP_URL = "https://download.ericzimmermanstools.com/net9/JLECmd.zip"; // official EZ mirror (.NET 9 build)
@@ -298,6 +300,7 @@ var TSORTKEY = 1, TSORTDIR = -1;      // timeline view: default Time desc
 var ASORTKEY = 3, ASORTDIR = -1;      // apps view: default Entries desc
 var IOCS = [];                        // lowercased IOC / keyword terms
 var DETREC = null;
+var DETEV = null, DETHL = "";          // Timeline event the detail pane was opened from, and the kv label it maps to
 var GHEAD = null, GROWS = [], GSRC = "";
 var GSORTKEY = -1, GSORTDIR = 1;
 var GSRCIDX = -1;
@@ -1539,9 +1542,20 @@ function hlClassFor(entryL){
   return "";
 }
 function kv(label,val,mono){ if(val==null||trimStr(val)==="") return "";
-  return '<div class="kv"><b>'+esc(label)+'</b><span class="'+(mono?"mono":"")+'">'+esc(val)+'</span></div>'; }
-function renderDetail(rec){
-  DETREC=rec;
+  return '<div class="kv'+((DETHL&&label===DETHL)?' kvhl':'')+'"><b>'+esc(label)+'</b><span class="'+(mono?"mono":"")+'">'+esc(val)+'</span></div>'; }
+var EVNAME = function(ev){ return ev.kind; };
+function evInfo(ev){ var k=ev.kind;
+  if(k==="last opened") return ["Entry last modified","DestList entry last modified - the last time this application opened the target"];
+  if(k==="target created") return ["Target created","the target file's own creation time, stored in the entry - when the file appeared, not an action by the application"];
+  if(/^DestList created/.test(k)) return ["DestList created (object-ID GUID time - not an open; can lag by days)","object-ID (GUID) time - approximate, can lag by days; not an open"];
+  if(/custom/.test(k)) return ["Source created / modified","custom jump-list file last written - activity of the application, not tied to this one item"];
+  return ["",""]; }
+/* A record can feed several Timeline rows (opened, target created, ...): when the detail pane is opened from
+   one, say which event that row is and highlight the timestamp it came from (evInfo -> [kv label, meaning]). */
+function evBanner(ev){ if(!ev) return ""; var inf=evInfo(ev);
+  return '<div class="evban">Timeline event: <b>'+esc(EVNAME(ev))+'</b> &nbsp;<span class="mono">'+esc(ev.t)+'</span>'+(inf[1]?(' &nbsp;- '+esc(inf[1])):'')+'</div>'; }
+function renderDetail(rec, ev){
+  DETREC=rec; DETEV=ev||null; DETHL=DETEV?evInfo(DETEV)[0]:"";
   var tgtHl=hlClassFor(rec.targetL);
   var h='<div class="mono" style="font-size:14px;margin-bottom:6px">'+typeTag(rec)+' <b class="'+(tgtHl||"")+'">'+esc(rec.target||"(no target path)")+'</b>'
     +(rec.target?(' <span class="lnk" style="font-size:12px;font-family:Segoe UI,Arial" data-q="'+esc(baseName(rec.target))+'" title="Search the loaded rows for this file name">search this file name</span>'):'')+'</div>';
@@ -1586,10 +1600,10 @@ function renderDetail(rec){
   h+='<h3>Source</h3>';
   h+=kv("Jump-list file", rec.src, true);
   h+=kv("Source created / modified", rec.srcCreated+"  /  "+rec.srcModified, true);
-  $("detBody").innerHTML=h;
+  $("detBody").innerHTML=evBanner(DETEV)+h;
   showEl("detailCard",true);
 }
-function closeDetail(){ DETREC=null; showEl("detailCard",false); $("detBody").innerHTML=""; }
+function closeDetail(){ DETREC=null; DETEV=null; DETHL=""; showEl("detailCard",false); $("detBody").innerHTML=""; }
 function copyDetail(){
   if(!DETREC){ setStatus("No record open","err"); return; }
   var r=DETREC, out=[];
@@ -1769,7 +1783,7 @@ function applyIocs(){
   for(var i=0;i<parts.length;i++){ var s=trimStr(parts[i]).toLowerCase(); if(s) out.push(s); }
   IOCS=out;
   $("iocInfo").innerHTML=IOCS.length?(nf(IOCS.length)+" term(s) active"):"no terms";
-  if(MODE==="jl"&&ROWS.length){ rescoreAll(); buildApps(); render(); if(DETREC) renderDetail(DETREC); }
+  if(MODE==="jl"&&ROWS.length){ rescoreAll(); buildApps(); render(); if(DETREC) renderDetail(DETREC, DETEV); }
   setStatus(IOCS.length?("IOC list applied — "+IOCS.length+" term(s), records rescored"):"IOC list cleared","ok");
 }
 
@@ -1910,7 +1924,7 @@ function init(){
       var rows=window.__viewRows||[];
       if(ix>=0&&ix<rows.length){
         var rr=rows[ix].rec||rows[ix];
-        renderDetail(rr);
+        renderDetail(rr, rows[ix].rec?rows[ix]:null);   // a Timeline row passes its event too
         try{ var dc=$("detailCard"), dt=dc.getBoundingClientRect().top;   // the card sits below the table: bring it on-screen, but only if it isn't already
           if(dt<0 || dt>document.documentElement.clientHeight-120) dc.scrollIntoView(true); }catch(es){}
         var trs=$("tbl").getElementsByTagName("tr");
